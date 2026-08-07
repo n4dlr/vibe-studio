@@ -24,20 +24,13 @@ Vibe Studio is a local-first, AI-assisted desktop coding IDE for Linux and Windo
 python -m venv .venv
 # Linux/macOS
 source .venv/bin/activate
-# Windows (Por requirements.txt
-python -m vibe_studio
-```
-
-Or install in editable mode:
-
-```bash
-pip install -e .ivate.ps1
+# Windows (PowerShell)
+# .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install -e .
 python -m vibe_studio
 ```
 
-### Option 2: direct package install
+### Option 2: editable install
 
 ```bash
 python -m venv .venv
@@ -45,6 +38,7 @@ python -m venv .venv
 source .venv/bin/activate
 # Windows (PowerShell)
 # .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 pip install -e .
 python -m vibe_studio
 ```
