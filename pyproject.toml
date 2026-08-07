@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vibe-studio"
+version = "0.1.0"
+description = "AI-first local desktop coding IDE"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Vibe Studio" }]
+license = { text = "MIT" }
+dependencies = [
+    "PySide6>=6.8.0",
+    "requests>=2.32.0",
+    "httpx>=0.27.0",
+    "pytest>=8.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+
+[project.scripts]
+vibe-studio = "vibe_studio.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vibe_studio*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
