@@ -55,6 +55,30 @@ def test_open_project_builds_file_tree_and_opens_file(tmp_path) -> None:
     assert "print('hello')" in editor_widget.toPlainText()
 
 
+def test_search_panel_finds_project_text(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    project_dir = tmp_path / "project"
+    (project_dir / "src").mkdir(parents=True)
+    code_file = project_dir / "src" / "main.py"
+    code_file.write_text("print('hello search')\n", encoding="utf-8")
+
+    settings = AppSettings(
+        project_path=str(project_dir),
+        default_provider="ollama",
+        default_model="llama3.1",
+        providers=[ProviderConfig(name="ollama", kind="ollama", base_url="http://127.0.0.1:11434", model="llama3.1")],
+    )
+    store = SettingsStore(tmp_path / "settings.json")
+    window = MainWindow(settings_store=store, settings=settings)
+
+    window.search_panel.set_workspace_root(project_dir)
+    window.search_panel.search_input.setText("search")
+    window.search_panel._run_search()
+
+    assert window.search_panel.results.count() > 0
+    assert "src/main.py" in window.search_panel.results.item(0).text()
+
+
 def test_chat_service_creates_file_when_prompt_requests_it(tmp_path) -> None:
     settings = AppSettings(
         project_path=str(tmp_path),

@@ -1,8 +1,7 @@
+"""ChatService — coordinates the autonomous agent, conversation history, streaming, and undo."""
 from __future__ import annotations
 
-import json
 import os
-import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,81 +12,136 @@ from vibe_studio.providers.openai_compatible_provider import OpenAICompatiblePro
 
 
 class ChatService:
-    """Coordinates chat commands, agent execution tasks, streaming activity, and undo history."""
+    """
+    Top-level chat coordinator.
+
+    Responsibilities:
+      - Maintain multi-turn conversation history (up to chat_history_limit turns)
+      - Wire streaming callbacks from provider → UI
+      - Manage one AutonomousAgent per task (cancelled on demand)
+      - Expose revert_last_change() for UI undo button
+    """
 
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
-        self._history: list[tuple[str, str, str | None]] = []
         self._agent: AutonomousAgent | None = None
+        self._provider: OllamaProvider | OpenAICompatibleProvider | None = None
         self.activity_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
+        # Conversation history as list of {"role": ..., "content": ...} dicts
+        self._conversation: list[dict[str, str]] = []
+
+    # ------------------------------------------------------------------
+    # Callbacks
+    # ------------------------------------------------------------------
 
     def add_activity_callback(self, cb: Callable[[str, dict[str, Any]], None]) -> None:
-        self.activity_callbacks.append(cb)
+        if cb not in self.activity_callbacks:
+            self.activity_callbacks.append(cb)
 
-    def _emit_activity(self, event_type: str, data: dict[str, Any]) -> None:
+    def _emit(self, event_type: str, data: dict[str, Any]) -> None:
         for cb in self.activity_callbacks:
             try:
                 cb(event_type, data)
             except Exception:
                 pass
 
-    def send_system_message(self, message: str) -> str:
-        return f"System: {message}"
+    # ------------------------------------------------------------------
+    # Provider resolution
+    # ------------------------------------------------------------------
 
-    def revert_last_change(self) -> bool:
-        if self._agent and self._agent.tool_registry.patch_tools.history:
-            return self._agent.tool_registry.patch_tools.undo_last_change()
-        if not self._history:
-            return False
-        file_path_str, previous_content, _ = self._history.pop()
-        file_path = Path(file_path_str)
-        if previous_content == "" and file_path.exists():
-            file_path.unlink(missing_ok=True)
-            return True
-        if file_path.parent.exists():
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(previous_content, encoding="utf-8")
-        return True
+    def _get_provider(self) -> OllamaProvider | OpenAICompatibleProvider | None:
+        s = self.model_manager.settings
+        if s.local_only or s.default_provider == "ollama":
+            url = "http://127.0.0.1:11434"
+            for p in s.providers:
+                if p.kind == "ollama":
+                    url = p.base_url
+            provider = OllamaProvider(base_url=url, timeout=120)
+            if provider.test_connection():
+                return provider
+            if s.local_only:
+                return None  # never fall through to remote
 
-    def cancel_current_agent(self) -> None:
-        if self._agent:
-            self._agent.cancel()
+        # OpenAI-compatible (or Ollama fallback)
+        api_key = ""
+        api_url = "https://api.openai.com/v1"
+        for p in s.providers:
+            if p.kind == "openai-compatible":
+                api_key = p.api_key or ""
+                api_url = p.base_url or api_url
+        env_key = os.getenv("OPENAI_API_KEY") or os.getenv("CUSTOM_API_KEY") or ""
+        key = api_key or env_key
+        if key:
+            return OpenAICompatibleProvider(base_url=api_url, api_key=key, timeout=120)
 
-    def _get_provider(self) -> Any:
-        provider_kind = self.model_manager.settings.default_provider
-        if provider_kind == "ollama":
-            url = self.model_manager._get_ollama_url()
-            p = OllamaProvider(base_url=url, timeout=10)
-            if p.test_connection():
-                return p
-            return None
-        env_key = os.getenv("OPENAI_API_KEY") or os.getenv("CUSTOM_API_KEY")
-        if env_key:
-            return OpenAICompatibleProvider(api_key=env_key, timeout=10)
-        return None
+        # Last resort — try Ollama without connection check
+        url = "http://127.0.0.1:11434"
+        for p in s.providers:
+            if p.kind == "ollama":
+                url = p.base_url
+        return OllamaProvider(base_url=url, timeout=120)
+
+    # ------------------------------------------------------------------
+    # Main chat entry point
+    # ------------------------------------------------------------------
 
     def chat(self, prompt: str, autonomy_mode: AutonomyMode = AutonomyMode.AUTO) -> str:
-        project_root = Path(self.model_manager.settings.project_path) if self.model_manager.settings.project_path else Path.cwd()
+        project_root = (
+            Path(self.model_manager.settings.project_path)
+            if self.model_manager.settings.project_path
+            else Path.cwd()
+        )
 
         provider = self._get_provider()
+        self._provider = provider
         model = self.model_manager.settings.default_model or "llama3.1"
+
+        # Streaming callback forwards chunks to UI as activity events
+        def _stream_chunk(chunk: str) -> None:
+            self._emit("stream_chunk", {"chunk": chunk})
 
         self._agent = AutonomousAgent(
             project_root=project_root,
             provider=provider,
             model=model,
             autonomy_mode=autonomy_mode,
+            stream_callback=_stream_chunk,
         )
 
-        def _agent_event(event_type: str, data: dict[str, Any]):
-            self._emit_activity(event_type, data)
+        # Wire agent events to UI
+        self._agent.add_event_callback(self._emit)
 
-        self._agent.add_event_callback(_agent_event)
+        # Append to conversation history
+        self._conversation.append({"role": "user", "content": prompt})
+        limit = self.model_manager.settings.chat_history_limit
+        if len(self._conversation) > limit * 2:
+            self._conversation = self._conversation[-(limit * 2):]
 
-        result = self._agent.run(prompt)
+        result = self._agent.run(prompt, conversation_history=self._conversation)
 
+        summary = result.summary
         if result.files_changed:
-            files_str = ", ".join(result.files_changed)
-            return f"{result.summary}\n\nModified files: {files_str}"
+            summary += f"\n\nModified files: {', '.join(result.files_changed)}"
 
-        return result.summary
+        # Record assistant turn
+        self._conversation.append({"role": "assistant", "content": summary})
+
+        return summary
+
+    # ------------------------------------------------------------------
+    # Control
+    # ------------------------------------------------------------------
+
+    def cancel_current_agent(self) -> None:
+        if self._agent:
+            self._agent.cancel()
+        if self._provider:
+            self._provider.cancel()
+
+    def revert_last_change(self) -> bool:
+        if self._agent and self._agent.tool_registry.patch_tools.history:
+            return self._agent.tool_registry.patch_tools.undo_last_change()
+        return False
+
+    def clear_history(self) -> None:
+        self._conversation.clear()

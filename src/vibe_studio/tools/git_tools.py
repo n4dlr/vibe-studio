@@ -52,6 +52,8 @@ class GitTools:
         return self._run_git(["add", path])
 
     def git_commit(self, message: str) -> str:
+        """Stage all tracked changes and commit."""
+        self._run_git(["add", "-u"])
         return self._run_git(["commit", "-m", message])
 
     def git_restore(self, path: str) -> str:

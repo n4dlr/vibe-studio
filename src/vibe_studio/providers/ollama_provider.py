@@ -1,38 +1,67 @@
+"""Ollama provider — local-first AI backend with streaming, tool calling, and cancellation."""
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+import threading
+from typing import Any, Callable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from vibe_studio.providers.base import AIProvider, ModelInfo, ProviderError
+from vibe_studio.providers.base import ModelInfo, ProviderError
 
 
 class OllamaProvider:
     name = "ollama"
 
-    def __init__(self, base_url: str = "http://127.0.0.1:11434", timeout: int = 30):
+    def __init__(self, base_url: str = "http://127.0.0.1:11434", timeout: int = 120):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self._cancel_event = threading.Event()
+
+    # ------------------------------------------------------------------
+    # Model discovery
+    # ------------------------------------------------------------------
 
     def list_models(self) -> list[ModelInfo]:
-        request = Request(f"{self.base_url}/api/tags", headers={"Content-Type": "application/json"})
         try:
-            with urlopen(request, timeout=5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            req = Request(
+                f"{self.base_url}/api/tags",
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(req, timeout=5) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
         except Exception:
             return []
-        models = payload.get("models", [])
         return [
             ModelInfo(
                 provider=self.name,
                 name=item.get("name", "unknown"),
-                context_window=8192,
+                context_window=item.get("details", {}).get("parameter_size") or 8192,
                 capabilities=["chat", "code", "tool_calling"],
                 status="ready",
             )
-            for item in models
+            for item in payload.get("models", [])
         ]
+
+    def test_connection(self) -> bool:
+        try:
+            return len(self.list_models()) > 0
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
+    # Cancellation
+    # ------------------------------------------------------------------
+
+    def cancel(self) -> None:
+        self._cancel_event.set()
+
+    def _reset_cancel(self) -> None:
+        self._cancel_event.clear()
+
+    # ------------------------------------------------------------------
+    # Generation — non-streaming and streaming
+    # ------------------------------------------------------------------
 
     def generate(
         self,
@@ -42,57 +71,160 @@ class OllamaProvider:
         system_prompt: str | None = None,
         stream: bool = False,
         callback: Callable[[str], None] | None = None,
+        temperature: float = 0.2,
+        top_p: float = 0.9,
         **kwargs: Any,
     ) -> str:
-        available = self.list_models()
-        available_names = [m.name for m in available]
-        target_model = model
+        self._reset_cancel()
+        model = self._resolve_model(model)
 
-        if available_names and target_model not in available_names:
-            # Fallback to matching model or first available model
-            code_models = [m for m in available_names if "coder" in m or "qwen" in m]
-            target_model = code_models[0] if code_models else available_names[0]
-
-        payload = {
-            "model": target_model,
+        payload: dict[str, Any] = {
+            "model": model,
             "prompt": prompt,
-            "system": system_prompt or "You are an autonomous AI software engineer inside Vibe Studio IDE.",
+            "system": system_prompt or (
+                "You are an autonomous AI software engineer inside Vibe Studio IDE. "
+                "You can use tools to read files, search code, edit files, run tests, and fix errors."
+            ),
             "stream": bool(stream and callback),
             "options": {
-                "temperature": kwargs.get("temperature", 0.2),
-                "top_p": kwargs.get("top_p", 0.9),
+                "temperature": temperature,
+                "top_p": top_p,
+                "num_ctx": kwargs.get("num_ctx", 8192),
             },
         }
-        request = Request(
+
+        req = Request(
             f"{self.base_url}/api/generate",
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        timeout = kwargs.get("timeout", self.timeout)
+
         try:
             if stream and callback:
-                full_response = []
-                with urlopen(request, timeout=kwargs.get("timeout", self.timeout)) as response:
-                    for line in response:
-                        if line:
-                            data = json.loads(line.decode("utf-8"))
-                            chunk = data.get("response", "")
-                            full_response.append(chunk)
-                            callback(chunk)
-                return "".join(full_response)
-            else:
-                with urlopen(request, timeout=kwargs.get("timeout", self.timeout)) as response:
-                    body = response.read().decode("utf-8")
-                result = json.loads(body)
-                return result.get("response", "")
+                return self._stream_generate(req, callback, timeout)
+            with urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+            return json.loads(body).get("response", "")
         except (HTTPError, URLError, TimeoutError) as exc:
-            raise ProviderError(f"Ollama request failed: {exc}") from exc
+            raise ProviderError(f"Ollama generate failed: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise ProviderError("Ollama returned malformed JSON") from exc
 
-    def test_connection(self) -> bool:
+    def _stream_generate(
+        self,
+        req: Request,
+        callback: Callable[[str], None],
+        timeout: int,
+    ) -> str:
+        chunks: list[str] = []
+        with urlopen(req, timeout=timeout) as resp:
+            for raw_line in resp:
+                if self._cancel_event.is_set():
+                    break
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    data = json.loads(raw_line.decode("utf-8"))
+                except Exception:
+                    continue
+                chunk = data.get("response", "")
+                if chunk:
+                    chunks.append(chunk)
+                    callback(chunk)
+                if data.get("done"):
+                    break
+        return "".join(chunks)
+
+    # ------------------------------------------------------------------
+    # Chat endpoint (multi-turn)
+    # ------------------------------------------------------------------
+
+    def chat(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        model: str,
+        stream: bool = False,
+        callback: Callable[[str], None] | None = None,
+        temperature: float = 0.2,
+        **kwargs: Any,
+    ) -> str:
+        self._reset_cancel()
+        model = self._resolve_model(model)
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": bool(stream and callback),
+            "options": {
+                "temperature": temperature,
+                "num_ctx": kwargs.get("num_ctx", 8192),
+            },
+        }
+
+        req = Request(
+            f"{self.base_url}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        timeout = kwargs.get("timeout", self.timeout)
+
         try:
-            models = self.list_models()
-            return len(models) > 0
-        except Exception:
-            return False
+            if stream and callback:
+                return self._stream_chat(req, callback, timeout)
+            with urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+            result = json.loads(body)
+            return result.get("message", {}).get("content", "")
+        except (HTTPError, URLError, TimeoutError) as exc:
+            raise ProviderError(f"Ollama chat failed: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise ProviderError("Ollama chat returned malformed JSON") from exc
+
+    def _stream_chat(
+        self,
+        req: Request,
+        callback: Callable[[str], None],
+        timeout: int,
+    ) -> str:
+        chunks: list[str] = []
+        with urlopen(req, timeout=timeout) as resp:
+            for raw_line in resp:
+                if self._cancel_event.is_set():
+                    break
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    data = json.loads(raw_line.decode("utf-8"))
+                except Exception:
+                    continue
+                chunk = data.get("message", {}).get("content", "")
+                if chunk:
+                    chunks.append(chunk)
+                    callback(chunk)
+                if data.get("done"):
+                    break
+        return "".join(chunks)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_model(self, model: str) -> str:
+        """Fallback to a running model if the requested one is not available."""
+        available = [m.name for m in self.list_models()]
+        if not available:
+            return model
+        if model in available:
+            return model
+        # Prefer coding models
+        for preference in ["coder", "qwen", "deepseek", "codellama", "llama"]:
+            for m in available:
+                if preference in m.lower():
+                    return m
+        return available[0]

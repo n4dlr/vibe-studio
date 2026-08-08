@@ -226,7 +226,12 @@ class ToolRegistry:
         self.register("git_diff", "Get Git diff", {"file_path": ToolParameter("string", "Optional file path", False, None)}, self.git_tools.git_diff)
         self.register("git_log", "Get recent Git commit log", {"limit": ToolParameter("integer", "Limit", False, 10)}, self.git_tools.git_log)
         self.register("git_branch", "List Git branches", {}, self.git_tools.git_branch)
-        self.register("git_commit", "Commit changes with message", {"message": ToolParameter("string", "Commit message")}, self.git_tools.git_commit)
+        self.register("git_commit", "Stage all changes and commit with message", {"message": ToolParameter("string", "Commit message")}, self.git_tools.git_commit)
+        self.register("git_restore", "Restore file to last committed state", {"path": ToolParameter("string", "File path")}, self.git_tools.git_restore)
+        self.register("git_checkout", "Checkout a branch", {"branch_name": ToolParameter("string", "Branch name")}, self.git_tools.git_checkout)
+
+        # Extra search
+        self.register("find_usages", "Find all usages of a symbol across workspace", {"symbol_name": ToolParameter("string", "Symbol")}, self.search_tools.find_references)
 
 
 def default_tool_registry(workspace_root: str | Path = ".") -> ToolRegistry:

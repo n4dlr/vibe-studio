@@ -70,14 +70,46 @@ class EditorWidget(QPlainTextEdit):
             self.setPlainText(text)
             self.is_dirty = False
 
-    def _on_text_changed(self):
-        self.is_dirty = True
+    def _on_text_changed(self) -> None:
+        if not self.is_dirty:
+            self.is_dirty = True
+            # Mark tab title with dot
+            tabs = self.parent()
+            if tabs is None:
+                return
+            # Walk up to QTabWidget
+            tab_widget = None
+            w = tabs
+            while w is not None:
+                from PySide6.QtWidgets import QTabWidget
+                if isinstance(w, QTabWidget):
+                    tab_widget = w
+                    break
+                w = w.parent()
+            if tab_widget:
+                for i in range(tab_widget.count()):
+                    if tab_widget.widget(i) is self:
+                        title = tab_widget.tabText(i)
+                        if not title.startswith("●"):
+                            tab_widget.setTabText(i, "● " + title)
+                        break
 
     def save(self) -> None:
         file_path = Path(self.path)
+        if str(file_path) == "untitled":
+            return
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(self.toPlainText(), encoding="utf-8")
         self.is_dirty = False
+
+    def go_to_line(self, line_number: int) -> None:
+        """Move cursor to a specific line number (1-indexed)."""
+        doc = self.document()
+        block = doc.findBlockByLineNumber(max(0, line_number - 1))
+        cursor = self.textCursor()
+        cursor.setPosition(block.position())
+        self.setTextCursor(cursor)
+        self.centerCursor()
 
     # ------------------------------------------------------------------
     # Line-number gutter
