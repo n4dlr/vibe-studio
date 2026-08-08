@@ -1,5 +1,7 @@
 """Main application window — VS Code-like layout for the Vibe Studio AI IDE."""
 from __future__ import annotations
+from PySide6.QtGui import QTextCursor
+
 
 import os
 import subprocess
@@ -540,7 +542,7 @@ class MainWindow(QMainWindow):
             self.chat.append("<b style='color:#4ade80;'>AI:</b> ")
             self._streaming_response = True
         cursor = self.chat.textCursor()
-        cursor.movePosition(cursor.End)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(chunk)
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
