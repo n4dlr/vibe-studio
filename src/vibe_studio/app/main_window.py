@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QDir, QObject, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QAction, QKeyEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QFormLayout,
     QFileDialog,
     QFileSystemModel,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -421,10 +427,81 @@ class MainWindow(QMainWindow):
 
     def run_project_tests(self):
         root = self.settings.project_path or str(Path.cwd())
-        self.terminal.write("Running tests...\n")
+        self.terminal.write(f"Running tests in {root}...\n")
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+            output = completed.stdout + completed.stderr
+            self.terminal.write(output)
+            self.test_runner_panel.set_output(output, passed=completed.returncode == 0)
+            self.problems_panel.set_problems([])
+        except Exception as exc:
+            self.terminal.write(f"Test run failed: {exc}\n")
+            self.test_runner_panel.set_output(str(exc), passed=False)
 
     def refresh_git_status(self):
-        pass
+        root = self.settings.project_path or str(Path.cwd())
+        try:
+            status = subprocess.run(["git", "status", "--short"], cwd=root, capture_output=True, text=True, check=False)
+            diff = subprocess.run(["git", "diff", "--"], cwd=root, capture_output=True, text=True, check=False)
+            branch = subprocess.run(["git", "branch", "--show-current"], cwd=root, capture_output=True, text=True, check=False)
+            self.git_panel.set_git_info(status.stdout, diff.stdout, branch.stdout.strip() or "main")
+        except Exception as exc:
+            self.git_panel.set_git_info(str(exc), "", "main")
 
     def show_settings(self) -> None:
-        QMessageBox.information(self, "Settings", "Vibe Studio settings saved in ~/.vibe_studio/settings.json")
+        dialog = SettingsDialog(self.settings, self.settings_store, parent=self)
+        dialog.exec_()
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, settings: AppSettings, settings_store: SettingsStore, parent=None):
+        super().__init__(parent)
+        self.settings = settings
+        self.settings_store = settings_store
+        self.setWindowTitle("Vibe Studio Settings")
+        self.resize(500, 320)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.provider_edit = QLineEdit(self.settings.default_provider)
+        self.model_edit = QLineEdit(self.settings.default_model)
+        self.project_edit = QLineEdit(self.settings.project_path)
+        self.theme_checkbox = QCheckBox("Dark theme")
+        self.theme_checkbox.setChecked(self.settings.dark_theme)
+        self.font_edit = QLineEdit(str(self.settings.font_size))
+
+        form.addRow("Provider", self.provider_edit)
+        form.addRow("Model", self.model_edit)
+        form.addRow("Project Path", self.project_edit)
+        form.addRow("Font Size", self.font_edit)
+        form.addRow("", self.theme_checkbox)
+
+        buttons = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self._save)
+        buttons.addStretch()
+        buttons.addWidget(save_btn)
+        layout.addLayout(form)
+        layout.addLayout(buttons)
+
+    def _save(self) -> None:
+        self.settings.default_provider = self.provider_edit.text().strip() or self.settings.default_provider
+        self.settings.default_model = self.model_edit.text().strip() or self.settings.default_model
+        self.settings.project_path = self.project_edit.text().strip() or self.settings.project_path
+        self.settings.dark_theme = self.theme_checkbox.isChecked()
+        try:
+            self.settings.font_size = int(self.font_edit.text().strip() or self.settings.font_size)
+        except ValueError:
+            self.settings.font_size = self.settings.font_size
+        self.settings_store.save(self.settings)
+        self.accept()

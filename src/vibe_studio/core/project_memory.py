@@ -34,6 +34,7 @@ class ProjectMemory:
 
     def save(self, data: dict[str, Any]) -> None:
         try:
+            self.storage.parent.mkdir(parents=True, exist_ok=True)
             self.storage.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError:
             pass

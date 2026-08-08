@@ -319,7 +319,7 @@ class AutonomousAgent:
         """Deterministic execution pipeline when running offline without LLM provider."""
         task_lower = task.lower()
 
-        if iteration > 2:
+        if iteration > 3:
             return "Task completed successfully."
 
         # Delete request parsing
@@ -354,10 +354,18 @@ class AutonomousAgent:
                 payload = {"tool": "create_file", "args": {"path": "numbers.txt", "content": numbers_str}}
                 return f"```json\n{json.dumps(payload, indent=2)}\n```"
 
-        # Background / login query parsing
-        if any(w in task_lower for w in ["background", "arxa fon", "login"]):
+        # Background / login / style request parsing
+        if any(w in task_lower for w in ["background", "arxa fon", "login", "gradient", "dark", "color", "style", "css"]):
+            target = self._select_style_target()
             if iteration == 1:
-                payload = {"tool": "search_filename", "args": {"pattern": "login"}}
+                payload = {"tool": "search_filename", "args": {"pattern": "login" if "login" in task_lower else "style"}}
+                return f"```json\n{json.dumps(payload, indent=2)}\n```"
+            if iteration == 2 and target:
+                payload = {"tool": "read_file", "args": {"path": target}}
+                return f"```json\n{json.dumps(payload, indent=2)}\n```"
+            if iteration == 3 and target:
+                gradient_css = "body { background: linear-gradient(135deg, #111827 0%, #3b82f6 100%); color: white; }\n"
+                payload = {"tool": "write_file", "args": {"path": target, "content": gradient_css}}
                 return f"```json\n{json.dumps(payload, indent=2)}\n```"
 
         # Test request parsing
@@ -366,3 +374,14 @@ class AutonomousAgent:
             return f"```json\n{json.dumps(payload, indent=2)}\n```"
 
         return "Task completed successfully."
+
+    def _select_style_target(self) -> str | None:
+        for path in sorted(self.project_root.rglob("*")):
+            if not path.is_file():
+                continue
+            name = path.name.lower()
+            if name.endswith((".css", ".scss", ".sass")):
+                return path.relative_to(self.project_root).as_posix()
+            if "style" in name or "login" in name:
+                return path.relative_to(self.project_root).as_posix()
+        return None

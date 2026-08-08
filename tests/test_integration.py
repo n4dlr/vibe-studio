@@ -5,6 +5,21 @@ from pathlib import Path
 from vibe_studio.agents.coding_agent import AgentState, AutonomousAgent, AutonomyMode
 
 
+def test_agent_updates_login_style_in_sample_project(tmp_path: Path):
+    project_root = tmp_path / "sample_project"
+    (project_root / "src").mkdir(parents=True)
+    login_file = project_root / "src" / "login.py"
+    login_file.write_text("def render_login():\n    return 'bg-light'\n", encoding="utf-8")
+    (project_root / "src" / "styles.css").write_text("body { background: white; }\n", encoding="utf-8")
+
+    agent = AutonomousAgent(project_root=project_root, autonomy_mode=AutonomyMode.AUTO)
+    result = agent.run("Login page-in backgroundunu daha modern gradient et.")
+
+    assert result.status == AgentState.COMPLETED
+    css_text = (project_root / "src" / "styles.css").read_text(encoding="utf-8")
+    assert "linear-gradient" in css_text or "background:" in css_text
+
+
 def test_autonomous_agent_integration_loop(tmp_path: Path):
     """
     End-to-end integration test proving the agent can:
