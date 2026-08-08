@@ -176,6 +176,13 @@ class ContextEngine:
                                         ".css", ".scss", ".json", ".yaml", ".toml", ".md"}:
                 score += 5
 
+            # Import/dependency graph bonus: if file is imported by or imports active file
+            if active_file:
+                active_stem = Path(active_file).stem
+                if active_stem and active_stem.lower() in rel_lower:
+                    score += 25
+                    reasons.append("imported graph")
+
             if score > 0:
                 candidates.append((path, score, reasons))
 
