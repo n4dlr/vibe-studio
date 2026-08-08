@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from vibe_studio.editor.lsp_client import LSPClient
 from vibe_studio.project.project_scanner import ProjectScanner, SymbolInfo
 
 
@@ -34,9 +35,9 @@ class SymbolIndex:
 
 
 class CodeIntelligenceEngine:
-    """Provides code intelligence without an external LSP server.
+    """Provides real LSP protocol (pylsp/pyright/tsserver/gopls/clangd) over JSON-RPC stdio.
 
-    Falls back to AST (Python) and regex (JS/TS/etc.) symbol indexing.
+    Falls back to AST (Python) and regex (JS/TS/etc.) symbol indexing when external LSP server is not installed.
     """
 
     SKIP = {".git", ".venv", "node_modules", "__pycache__", "dist", "build", ".pytest_cache"}
@@ -44,6 +45,17 @@ class CodeIntelligenceEngine:
     def __init__(self, workspace_root: str | Path):
         self.workspace_root = Path(workspace_root).resolve()
         self._index: SymbolIndex | None = None
+        self._lsp_clients: dict[str, LSPClient] = {}
+
+    def get_lsp_client(self, language: str) -> LSPClient | None:
+        lang = language.lower()
+        if lang not in self._lsp_clients:
+            client = LSPClient(lang, self.workspace_root)
+            if client.is_available() and client.start():
+                self._lsp_clients[lang] = client
+            else:
+                return None
+        return self._lsp_clients.get(lang)
 
     # ------------------------------------------------------------------
     # Index management
