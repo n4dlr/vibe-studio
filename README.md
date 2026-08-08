@@ -287,3 +287,84 @@ pytest tests/test_integration.py  # will use running Ollama if available
 - **Real-Time File Watching**: `WorkspaceFileWatcher` (`src/vibe_studio/filesystem/file_watcher.py`) auto-refreshes file explorer, Git status, and open editor tabs on external disk modifications, invalidating symbol caches while protecting unsaved user edits.
 - **Large-Project Context Engine**: Import-graph dependency ranking and token-budgeted scoring select relevant files accurately for projects with 1000+ files.
 - **Offline & Model Fallback**: Graceful fallback to deterministic rule-based execution when Ollama or remote LLM APIs are offline.
+
+## ⚠️ Disclaimer & Security
+
+### User Responsibility
+**Vibe Studio** is a tool that provides AI-assisted code editing capabilities. The AI agent executes commands based on user input. **The user is solely responsible for:**
+
+- All code changes made by the AI agent
+- Any consequences resulting from executed commands
+- Ensuring the safety and security of their codebase
+- Reviewing all AI-suggested changes before accepting them
+
+### No Warranty
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+### AI Safety Warnings
+- **Never run Vibe Studio on production or critical systems without thorough testing**
+- **Always review AI-generated code before committing or deploying**
+- **The AI agent may produce incorrect, insecure, or harmful code**
+- **Use Ollama in local-only mode for maximum privacy**
+- **Enable "Plan Mode" to review and approve all AI actions**
+- **Regularly backup your projects before using AI agents**
+
+### Liability Waiver
+By using Vibe Studio, you acknowledge and agree that:
+
+1. **The author(s) assume NO LIABILITY** for any damages, data loss, security breaches, or legal issues arising from the use of this software
+2. **The user assumes ALL RISKS** associated with AI-generated code
+3. **The user is responsible** for complying with applicable laws and regulations
+4. **The author(s) provide NO GUARANTEE** regarding code quality, security, or fitness for any purpose
+
+### Security Features
+Vibe Studio includes safety mechanisms, but these are **not foolproof**:
+- Workspace boundary enforcement
+- Command risk classification (SAFE → CRITICAL)
+- Secret redaction for remote APIs
+- Local-only mode (Ollama)
+
+**These features are provided as additional safeguards, NOT as guarantees of security.**
+
+---
+
+## 📋 End-User Agreement (EULA)
+
+By installing or using Vibe Studio, you agree to:
+
+✅ Use the software responsibly and ethically  
+✅ Not use the AI agent to create malware, exploits, or harmful code  
+✅ Review all AI-suggested changes thoroughly  
+✅ Backup your projects before executing AI operations  
+✅ Accept full responsibility for all actions performed with Vibe Studio  
+❌ Hold the authors harmless from any damages or liabilities  
+
+> **Important:** Vibe Studio is an experimental AI tool. It is NOT certified for safety-critical applications, medical devices, nuclear facilities, or any environment where failure could cause harm.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+MIT License
+
+Copyright (c) 2026 n4dlr
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
