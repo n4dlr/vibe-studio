@@ -179,12 +179,10 @@ class MainWindow(QMainWindow):
         model_row = QHBoxLayout()
         model_row.addWidget(QLabel("Model:"))
         self.model_combo = QComboBox()
-        self.model_combo.setStyleSheet("QComboBox { background: #171d26; color: #edf5ff; border: 1px solid #2b3341; border-radius: 6px; padding: 4px 8px; }")
         model_row.addWidget(self.model_combo)
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Auto Mode", "Plan Mode", "Ask Mode"])
-        self.mode_combo.setStyleSheet("QComboBox { background: #171d26; color: #edf5ff; border: 1px solid #2b3341; border-radius: 6px; padding: 4px 8px; }")
         model_row.addWidget(self.mode_combo)
         right_layout.addLayout(model_row)
 
