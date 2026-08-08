@@ -37,6 +37,8 @@ from vibe_studio.ai.model_manager import ModelManager
 from vibe_studio.core.settings import AppSettings, ProviderConfig, SettingsStore
 from vibe_studio.editor.diff_viewer import DiffViewerDialog
 from vibe_studio.editor.editor_widget import EditorWidget
+from vibe_studio.editor.code_intelligence import CodeIntelligenceEngine
+from vibe_studio.filesystem.file_watcher import WorkspaceFileWatcher
 from vibe_studio.filesystem.project_manager import ProjectManager
 from vibe_studio.terminal.terminal_widget import TerminalWidget
 from vibe_studio.ui.ai_activity_panel import AIActivityPanel
@@ -102,6 +104,10 @@ class MainWindow(QMainWindow):
         self._agent_thread: QThread | None = None
         self._agent_worker: AgentWorker | None = None
         self._streaming_response = False
+        self._file_watcher = WorkspaceFileWatcher(parent=self)
+        self._code_intelligence: CodeIntelligenceEngine | None = None
+        self._file_watcher.directory_changed.connect(self._on_workspace_changed)
+        self._file_watcher.file_changed.connect(self._on_file_changed_on_disk)
 
         self.setWindowTitle("Vibe Studio — AI Desktop IDE")
         self.resize(1600, 980)
@@ -683,9 +689,13 @@ class MainWindow(QMainWindow):
         self.explorer.setRootIndex(self.file_model.index(folder))
         self.search_panel.set_workspace_root(folder)
         self.terminal.new_session(cwd=folder)
-        self.setWindowTitle(f"Vibe Studio — {Path(folder).name}")
+        self.setWindowTitle(f"Vibe Studio \u2014 {Path(folder).name}")
         self._set_status(f"Opened project: {folder}")
         self.refresh_git_status()
+        # Activate real-time file watching and code intelligence
+        self._file_watcher.set_workspace_root(folder)
+        self._code_intelligence = CodeIntelligenceEngine(folder)
+        # Index is built lazily on first use
 
     def open_file(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(self, "Open File")
@@ -702,6 +712,8 @@ class MainWindow(QMainWindow):
                     w.go_to_line(goto_line)
                 return
         editor = EditorWidget(str(path))
+        if self._code_intelligence is not None:
+            editor.set_code_intelligence(self._code_intelligence)
         self.editor_tabs.addTab(editor, path.name)
         self.editor_tabs.setCurrentIndex(self.editor_tabs.count() - 1)
         if goto_line:
@@ -718,6 +730,29 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 return
         self.editor_tabs.removeTab(index)
+
+    @Slot(str)
+    def _on_workspace_changed(self, changed_dir: str) -> None:
+        """Refresh explorer and git status when a directory entry changes."""
+        folder = self.settings.project_path
+        if folder:
+            self.file_model.setRootPath(folder)
+            self.explorer.setRootIndex(self.file_model.index(folder))
+        self.refresh_git_status()
+        if self._code_intelligence is not None:
+            self._code_intelligence.invalidate_index()
+
+    @Slot(str)
+    def _on_file_changed_on_disk(self, changed_file: str) -> None:
+        """Reload an open editor tab if the file changed on disk and is unmodified."""
+        for idx in range(self.editor_tabs.count()):
+            w = self.editor_tabs.widget(idx)
+            if isinstance(w, EditorWidget) and w.path == changed_file:
+                w.reload_from_disk()
+                break
+        if self._code_intelligence is not None:
+            self._code_intelligence.invalidate_index()
+
 
     def _save_current_editor(self) -> None:
         curr = self.editor_tabs.currentWidget()

@@ -75,7 +75,23 @@ class PatchTools:
         current = target_path.read_text(encoding="utf-8", errors="replace")
         return self._hash(current) != expected_hash
 
-    def patch_file(self, path: str, target_text: str, replacement_text: str) -> dict[str, Any]:
+    def patch_file(
+        self,
+        path: str,
+        target_text: str | None = None,
+        replacement_text: str | None = None,
+        *,
+        old_text: str | None = None,
+        new_text: str | None = None,
+    ) -> dict[str, Any]:
+        # Accept old_text/new_text as aliases for compatibility
+        if target_text is None:
+            target_text = old_text
+        if replacement_text is None:
+            replacement_text = new_text
+        if target_text is None or replacement_text is None:
+            return {"exit_code": 1, "stdout": "", "stderr": "target_text and replacement_text are required", "status": "error"}
+
         target_path = self._resolve(path)
         if not target_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
@@ -106,8 +122,11 @@ class PatchTools:
         snapshot = self._record_snapshot(rel_path, old_content, new_content)
 
         return {
+            "exit_code": 0,
             "status": "success",
             "file": rel_path,
+            "stdout": f"Patched {rel_path}",
+            "stderr": "",
             "diff": snapshot.diff,
             "hash_before": snapshot.hash_before,
             "hash_after": snapshot.hash_after,
@@ -206,3 +225,7 @@ class PatchTools:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text(snapshot.previous_content, encoding="utf-8")
         return True
+
+    def revert_last_change(self) -> dict[str, Any]:
+        ok = self.undo_last_change()
+        return {"exit_code": 0 if ok else 1, "status": "success" if ok else "error", "stdout": "Reverted last change" if ok else "No changes to revert", "stderr": ""}

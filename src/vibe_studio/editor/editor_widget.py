@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QPainter
+
+from PySide6.QtCore import QRect, QSize, QStringListModel, Qt
+from PySide6.QtGui import QColor, QFont, QKeyEvent, QPainter
 from PySide6.QtWidgets import (
+    QCompleter,
     QPlainTextEdit,
     QWidget,
 )
@@ -24,7 +27,8 @@ class LineNumberArea(QWidget):
 
 
 class EditorWidget(QPlainTextEdit):
-    """Full-featured code editor with syntax highlighting, line numbers, and inline AI actions.
+    """Full-featured code editor with syntax highlighting, line numbers, autocomplete,
+    and inline AI actions.
 
     Uses QPlainTextEdit for proper block-level API support (firstVisibleBlock,
     blockBoundingGeometry, updateRequest signal, etc.).
@@ -35,6 +39,7 @@ class EditorWidget(QPlainTextEdit):
         self.path = path
         self.is_dirty = False
         self.line_number_area = LineNumberArea(self)
+        self._code_intelligence = None  # Set externally via set_code_intelligence()
 
         self.setFont(QFont("monospace", 11))
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
@@ -51,6 +56,19 @@ class EditorWidget(QPlainTextEdit):
         lang = Path(path).suffix.lstrip(".") or "python"
         self.highlighter = MultiLanguageHighlighter(self.document(), language=lang)
 
+        # Autocomplete setup
+        self._completer = QCompleter(self)
+        self._completer.setWidget(self)
+        self._completer.setCompletionMode(QCompleter.PopupCompletion)
+        self._completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._completer.activated.connect(self._insert_completion)
+        self._completion_model = QStringListModel(self)
+        self._completer.setModel(self._completion_model)
+        self._completer.popup().setStyleSheet(
+            "QListView { background: #0d1926; color: #e6edf7; border: 1px solid #2d4a66; }"
+            "QListView::item:selected { background: #1e3a5f; }"
+        )
+
         # QPlainTextEdit has these signals natively
         self.blockCountChanged.connect(self.update_line_number_area_width)
         self.updateRequest.connect(self.update_line_number_area)
@@ -58,6 +76,99 @@ class EditorWidget(QPlainTextEdit):
 
         self.update_line_number_area_width(0)
         self._load_file()
+
+    # ------------------------------------------------------------------
+    # Code Intelligence
+    # ------------------------------------------------------------------
+
+    def set_code_intelligence(self, engine) -> None:
+        """Attach a CodeIntelligenceEngine instance for completions and navigation."""
+        self._code_intelligence = engine
+
+    def _current_word(self) -> str:
+        cursor = self.textCursor()
+        cursor.select(cursor.WordUnderCursor)
+        return cursor.selectedText()
+
+    def _trigger_autocomplete(self) -> None:
+        if self._code_intelligence is None:
+            return
+        prefix = self._current_word()
+        if len(prefix) < 2:
+            self._completer.popup().hide()
+            return
+
+        completions = self._code_intelligence.get_completions(prefix, self.path)
+        if not completions:
+            self._completer.popup().hide()
+            return
+
+        self._completion_model.setStringList(completions)
+        self._completer.setCompletionPrefix(prefix)
+
+        cr = self.cursorRect()
+        cr.setWidth(
+            self._completer.popup().sizeHintForColumn(0)
+            + self._completer.popup().verticalScrollBar().sizeHint().width()
+        )
+        self._completer.complete(cr)
+
+    def _insert_completion(self, text: str) -> None:
+        cursor = self.textCursor()
+        # Delete the partial word the user already typed
+        prefix = self._completer.completionPrefix()
+        for _ in range(len(prefix)):
+            cursor.deletePreviousChar()
+        cursor.insertText(text)
+        self.setTextCursor(cursor)
+
+    def go_to_definition(self) -> None:
+        """F12: navigate to the definition of the symbol under cursor."""
+        if self._code_intelligence is None:
+            return
+        symbol = self._current_word()
+        if not symbol:
+            return
+        results = self._code_intelligence.find_definition(symbol)
+        if not results:
+            return
+        best = results[0]
+        main_win = self.window()
+        if hasattr(main_win, "open_editor"):
+            workspace = getattr(self._code_intelligence, "workspace_root", None)
+            if workspace:
+                full_path = workspace / best.file
+                main_win.open_editor(full_path, goto_line=best.line)
+
+    # ------------------------------------------------------------------
+    # Key handling: Ctrl+Space for autocomplete, F12 for definition
+    # ------------------------------------------------------------------
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        # If completer popup is visible, let it handle navigation keys
+        if self._completer.popup().isVisible():
+            if event.key() in (
+                Qt.Key_Enter, Qt.Key_Return, Qt.Key_Escape,
+                Qt.Key_Tab, Qt.Key_Backtab,
+            ):
+                event.ignore()
+                return
+
+        if event.key() == Qt.Key_F12:
+            self.go_to_definition()
+            return
+
+        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Space:
+            self._trigger_autocomplete()
+            return
+
+        super().keyPressEvent(event)
+
+        # After every character key, refresh completions if popup is already open
+        if not event.text():
+            return
+        if self._completer.popup().isVisible():
+            self._trigger_autocomplete()
 
     # ------------------------------------------------------------------
     # File I/O
@@ -69,6 +180,11 @@ class EditorWidget(QPlainTextEdit):
             text = file_path.read_text(encoding="utf-8", errors="replace")
             self.setPlainText(text)
             self.is_dirty = False
+
+    def reload_from_disk(self) -> None:
+        """Reload content from disk if the file has NOT been modified by the user."""
+        if not self.is_dirty:
+            self._load_file()
 
     def _on_text_changed(self) -> None:
         if not self.is_dirty:
@@ -179,6 +295,10 @@ class EditorWidget(QPlainTextEdit):
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu()
         menu.addSeparator()
+
+        intel_menu = menu.addMenu("Code Intelligence")
+        intel_menu.addAction("Go to Definition  (F12)", self.go_to_definition)
+        intel_menu.addAction("Trigger Autocomplete  (Ctrl+Space)", self._trigger_autocomplete)
 
         ai_menu = menu.addMenu("AI Code Actions")
         ai_menu.addAction("Explain Selection", lambda: self.parent_window_action("explain"))
