@@ -35,7 +35,11 @@ class GitTools:
             args.append("--cached")
         if file_path:
             target = PathSecurity.validate_workspace_path(self.workspace_root / file_path, self.workspace_root)
-            args.extend(["--", target.relative_to(self.workspace_root).as_posix()])
+            try:
+                rel_path = target.relative_to(self.workspace_root).as_posix()
+            except ValueError:
+                rel_path = str(target)
+            args.extend(["--", rel_path])
         return self._run_git(args)
 
     def git_unstage(self, path: str) -> str:
