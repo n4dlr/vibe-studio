@@ -2,6 +2,9 @@
 
 Provides real LSP protocol support for Pyright, pylsp, typescript-language-server,
 gopls, rust-analyzer, and clangd over stdio transport.
+
+Bug fix: replaced busy-wait (threading.Event().wait()) with per-request Events
+stored in _pending_events so each send properly waits for its specific response.
 """
 from __future__ import annotations
 
@@ -33,14 +36,28 @@ class LSPClient:
         self.server_cmd = self.KNOWN_SERVERS.get(self.language, "")
         self.process: subprocess.Popen[bytes] | None = None
         self._request_id = 0
+        self._id_lock = threading.Lock()
+
+        # Per-request response storage: id → response dict
         self._pending_responses: dict[int, dict[str, Any]] = {}
-        self._lock = threading.Lock()
+        # Per-request event: id → threading.Event (set when response arrives)
+        self._pending_events: dict[int, threading.Event] = {}
+        self._response_lock = threading.Lock()
+
+        # Diagnostics published by the server
+        self._diagnostics: dict[str, list[dict[str, Any]]] = {}
+        self._diagnostics_callbacks: list[Callable[[str, list[dict[str, Any]]], None]] = []
+
         self.is_running = False
 
     def is_available(self) -> bool:
         if not self.server_cmd:
             return False
         return shutil.which(self.server_cmd) is not None
+
+    def on_diagnostics(self, callback: Callable[[str, list[dict[str, Any]]], None]) -> None:
+        """Register a callback for textDocument/publishDiagnostics notifications."""
+        self._diagnostics_callbacks.append(callback)
 
     def start(self) -> bool:
         if not self.is_available():
@@ -61,7 +78,7 @@ class LSPClient:
             self.is_running = True
 
             # Start reader thread
-            t = threading.Thread(target=self._read_responses, daemon=True)
+            t = threading.Thread(target=self._read_responses, daemon=True, name="lsp-reader")
             t.start()
 
             # Send LSP initialize request
@@ -73,9 +90,18 @@ class LSPClient:
                     "capabilities": {
                         "textDocument": {
                             "definition": {"dynamicRegistration": True},
-                            "hover": {"dynamicRegistration": True},
-                            "completion": {"completionItem": {"snippetSupport": True}},
-                        }
+                            "hover": {"dynamicRegistration": True, "contentFormat": ["markdown", "plaintext"]},
+                            "completion": {
+                                "completionItem": {
+                                    "snippetSupport": True,
+                                    "documentationFormat": ["markdown", "plaintext"],
+                                }
+                            },
+                            "publishDiagnostics": {"relatedInformation": True},
+                        },
+                        "workspace": {
+                            "symbol": {"dynamicRegistration": True},
+                        },
                     },
                 },
             )
@@ -90,7 +116,7 @@ class LSPClient:
     def stop(self) -> None:
         if self.process and self.is_running:
             try:
-                self._send_request("shutdown", {})
+                self._send_request("shutdown", {}, timeout=1.0)
                 self._send_notification("exit", {})
                 self.process.terminate()
             except Exception:
@@ -101,13 +127,21 @@ class LSPClient:
     # JSON-RPC 2.0 stdio transport
     # ------------------------------------------------------------------
 
-    def _send_request(self, method: str, params: dict[str, Any], timeout: float = 2.0) -> dict[str, Any] | None:
+    def _next_id(self) -> int:
+        with self._id_lock:
+            self._request_id += 1
+            return self._request_id
+
+    def _send_request(self, method: str, params: dict[str, Any], timeout: float = 3.0) -> dict[str, Any] | None:
         if not self.process or not self.process.stdin:
             return None
 
-        with self._lock:
-            self._request_id += 1
-            req_id = self._request_id
+        req_id = self._next_id()
+
+        # Register event BEFORE sending so reader thread can't miss the response
+        event = threading.Event()
+        with self._response_lock:
+            self._pending_events[req_id] = event
 
         payload = {
             "jsonrpc": "2.0",
@@ -122,12 +156,16 @@ class LSPClient:
             self.process.stdin.write(header + body)
             self.process.stdin.flush()
         except Exception:
+            with self._response_lock:
+                self._pending_events.pop(req_id, None)
             return None
 
-        # Wait for response
-        start_time = threading.Event()
-        start_time.wait(timeout=timeout)
-        return self._pending_responses.pop(req_id, None)
+        # Wait for the specific response event (proper correlated wait)
+        event.wait(timeout=timeout)
+
+        with self._response_lock:
+            self._pending_events.pop(req_id, None)
+            return self._pending_responses.pop(req_id, None)
 
     def _send_notification(self, method: str, params: dict[str, Any]) -> None:
         if not self.process or not self.process.stdin:
@@ -149,18 +187,56 @@ class LSPClient:
                     break
                 if line.startswith(b"Content-Length:"):
                     length = int(line.split(b":")[1].strip())
-                    # Skip blank line
+                    # Skip blank line separator
                     self.process.stdout.readline()
                     content = self.process.stdout.read(length)
                     data = json.loads(content.decode("utf-8"))
+
                     if "id" in data:
-                        self._pending_responses[data["id"]] = data
+                        # This is a response to a request
+                        req_id = data["id"]
+                        with self._response_lock:
+                            self._pending_responses[req_id] = data
+                            event = self._pending_events.get(req_id)
+                        if event:
+                            event.set()  # Wake up the waiting _send_request
+                    elif data.get("method") == "textDocument/publishDiagnostics":
+                        # Server-initiated diagnostics notification
+                        params = data.get("params", {})
+                        uri = params.get("uri", "")
+                        diags = params.get("diagnostics", [])
+                        self._diagnostics[uri] = diags
+                        for cb in self._diagnostics_callbacks:
+                            try:
+                                cb(uri, diags)
+                            except Exception:
+                                pass
             except Exception:
                 break
 
     # ------------------------------------------------------------------
     # High-level LSP features
     # ------------------------------------------------------------------
+
+    def notify_open(self, file_path: str, content: str, language_id: str | None = None) -> None:
+        """Notify the server that a document was opened."""
+        uri = (self.workspace_root / file_path).as_uri()
+        self._send_notification("textDocument/didOpen", {
+            "textDocument": {
+                "uri": uri,
+                "languageId": language_id or self.language,
+                "version": 1,
+                "text": content,
+            }
+        })
+
+    def notify_change(self, file_path: str, content: str, version: int = 2) -> None:
+        """Notify the server of document changes."""
+        uri = (self.workspace_root / file_path).as_uri()
+        self._send_notification("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": version},
+            "contentChanges": [{"text": content}],
+        })
 
     def goto_definition(self, file_path: str, line: int, character: int) -> list[dict[str, Any]]:
         uri = (self.workspace_root / file_path).as_uri()
@@ -195,3 +271,35 @@ class LSPClient:
         if isinstance(contents, list):
             return "\n".join(str(c) for c in contents)
         return str(contents)
+
+    def get_completions(self, file_path: str, line: int, character: int) -> list[dict[str, Any]]:
+        """Request completion items at the given position."""
+        uri = (self.workspace_root / file_path).as_uri()
+        res = self._send_request(
+            "textDocument/completion",
+            {
+                "textDocument": {"uri": uri},
+                "position": {"line": max(0, line - 1), "character": character},
+            },
+        )
+        if not res or "result" not in res or not res["result"]:
+            return []
+        result = res["result"]
+        # Result can be CompletionList or CompletionItem[]
+        if isinstance(result, dict):
+            return result.get("items", [])
+        if isinstance(result, list):
+            return result
+        return []
+
+    def workspace_symbols(self, query: str) -> list[dict[str, Any]]:
+        """Search for symbols across the workspace."""
+        res = self._send_request("workspace/symbol", {"query": query})
+        if not res or "result" not in res:
+            return []
+        return res["result"] or []
+
+    def get_diagnostics(self, file_path: str) -> list[dict[str, Any]]:
+        """Return last known diagnostics for a file."""
+        uri = (self.workspace_root / file_path).as_uri()
+        return self._diagnostics.get(uri, [])

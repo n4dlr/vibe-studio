@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vibe_studio.tools.code_tools import CodeTools
+from vibe_studio.tools.code_analysis_tools import CodeAnalysisTools
 from vibe_studio.tools.filesystem_tools import FilesystemTools
 from vibe_studio.tools.git_tools import GitTools
 from vibe_studio.tools.patch_tools import PatchTools
@@ -62,6 +63,7 @@ class ToolRegistry:
         self.patch_tools = PatchTools(self.workspace_root)
         self.terminal_tools = TerminalTools(self.workspace_root)
         self.git_tools = GitTools(self.workspace_root)
+        self.code_analysis_tools = CodeAnalysisTools(self.workspace_root)
         self._tools: dict[str, ToolDefinition] = {}
         self._register_default_tools()
 
@@ -342,9 +344,22 @@ class ToolRegistry:
             {"symbol_name": S("string", "Symbol name")},
             self.search_tools.find_references, risk=R.SAFE)
 
-        self.register("find_definition", "Find where a symbol is defined",
+        self.register("find_definition", "Find definition of a symbol across the project",
             {"symbol_name": S("string", "Symbol name")},
             self.search_tools.find_definition, risk=R.SAFE)
+
+        # ── Code Analysis (AST) ──────────────────────────────────────
+        self.register("get_function_signatures", "Extract function/class signatures from a Python file via AST",
+            {"path": S("string", "Python file path")},
+            self.code_analysis_tools.get_function_signatures, risk=R.SAFE)
+
+        self.register("find_unused_imports", "Identify unused imported symbols in a Python file",
+            {"path": S("string", "Python file path")},
+            self.code_analysis_tools.find_unused_imports, risk=R.SAFE)
+
+        self.register("get_complexity_score", "Calculate cyclomatic complexity per function in a Python file",
+            {"path": S("string", "Python file path")},
+            self.code_analysis_tools.get_complexity_score, risk=R.SAFE)
 
         self.register("search_import", "Find imports of a module",
             {"module_name": S("string", "Module or package name")},
