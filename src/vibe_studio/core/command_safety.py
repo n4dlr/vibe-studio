@@ -184,7 +184,7 @@ class CommandSafety:
             try:
                 work_dir = PathSecurity.validate_workspace_path(work_dir, workspace_root)
             except PathSecurityError:
-                pass  # use as-is; validate_workspace_path logs the violation
+                work_dir = PathSecurity.normalize_path(workspace_root)
 
         assessment = CommandSafety.assess_risk(command, cwd=work_dir, workspace_root=workspace_root)
 

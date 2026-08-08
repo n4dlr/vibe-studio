@@ -58,6 +58,16 @@ class FilesystemTools:
         if not target.is_file():
             raise FileNotFoundError(f"File not found: {path}")
 
+        # Check for binary content
+        try:
+            with open(target, "rb") as f:
+                header = f.read(4096)
+                if b"\x00" in header:
+                    size = target.stat().st_size
+                    return f"[Binary file: {target.name} ({size} bytes)]"
+        except Exception:
+            pass
+
         lines = target.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
         if start_line <= 1 and end_line is None:
             return "".join(lines)
@@ -122,7 +132,11 @@ class FilesystemTools:
     def rename_file(self, path: str, new_name: str) -> str:
         target = self._resolve(path)
         dst = target.parent / new_name
-        return self.move_file(path, str(dst.relative_to(self.workspace_root)))
+        try:
+            rel_dst = dst.relative_to(self.workspace_root).as_posix()
+        except ValueError:
+            rel_dst = str(dst)
+        return self.move_file(path, rel_dst)
 
     def file_exists(self, path: str) -> bool:
         try:

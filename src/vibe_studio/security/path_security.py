@@ -33,19 +33,30 @@ class PathSecurity:
         ws_root = PathSecurity.normalize_path(workspace_root)
         p = Path(path)
         if not p.is_absolute():
-            target = PathSecurity.normalize_path(ws_root / p)
+            target = ws_root / p
         else:
-            target = PathSecurity.normalize_path(p)
+            target = p
+
+        resolved_target = PathSecurity.normalize_path(target)
 
         # Check if target is equal to or relative to workspace root
         try:
-            target.relative_to(ws_root)
+            resolved_target.relative_to(ws_root)
         except ValueError:
+            # Case-insensitive drive and path check for Windows
+            if os.name == "nt":
+                norm_target = os.path.normcase(os.path.abspath(str(resolved_target)))
+                norm_root = os.path.normcase(os.path.abspath(str(ws_root)))
+                try:
+                    if os.path.commonpath([norm_target, norm_root]) == norm_root:
+                        return resolved_target
+                except ValueError:
+                    pass
             raise PathSecurityError(
-                f"Access denied: path '{target}' is outside allowed workspace '{ws_root}'"
+                f"Access denied: path '{resolved_target}' is outside allowed workspace '{ws_root}'"
             )
 
-        return target
+        return resolved_target
 
     @staticmethod
     def is_within_workspace(path: str | Path, workspace_root: str | Path) -> bool:

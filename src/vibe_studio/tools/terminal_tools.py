@@ -33,13 +33,37 @@ class TerminalTools:
             "cancelled": result.cancelled,
         }
 
+    def _get_pytest_cmd(self) -> str:
+        import shlex, sys
+        root = self.workspace_root
+        if (root / ".venv" / "bin" / "pytest").exists():
+            return shlex.quote(str(root / ".venv" / "bin" / "pytest"))
+        if (root / ".venv" / "Scripts" / "pytest.exe").exists():
+            return shlex.quote(str(root / ".venv" / "Scripts" / "pytest.exe"))
+        if (root / "venv" / "bin" / "pytest").exists():
+            return shlex.quote(str(root / "venv" / "bin" / "pytest"))
+        if (root / "venv" / "Scripts" / "pytest.exe").exists():
+            return shlex.quote(str(root / "venv" / "Scripts" / "pytest.exe"))
+        return f"{shlex.quote(sys.executable)} -m pytest"
+
     def execute_script(self, script_path: str, args: list[str] | None = None, timeout: int = 60) -> dict[str, Any]:
+        import shlex, sys
         target = PathSecurity.validate_workspace_path(self.workspace_root / script_path, self.workspace_root)
         if not target.exists():
             raise FileNotFoundError(f"Script not found: {script_path}")
         arg_str = " ".join(args) if args else ""
-        cmd = f"python {target.name} {arg_str}" if target.suffix == ".py" else f"bash {target.name} {arg_str}"
-        return self.execute_command(cmd, cwd=str(target.parent.relative_to(self.workspace_root)), timeout=timeout)
+        if target.suffix == ".py":
+            cmd = f"{shlex.quote(sys.executable)} {target.name} {arg_str}".strip()
+        else:
+            if os.name == "nt":
+                cmd = f"cmd /C {target.name} {arg_str}".strip()
+            else:
+                cmd = f"bash {target.name} {arg_str}".strip()
+        try:
+            rel_parent = target.parent.relative_to(self.workspace_root).as_posix()
+        except ValueError:
+            rel_parent = "."
+        return self.execute_command(cmd, cwd=rel_parent or ".", timeout=timeout)
 
     def run_program(self, program: str, args: list[str] | None = None, timeout: int = 60) -> dict[str, Any]:
         arg_str = " ".join(args) if args else ""
@@ -51,7 +75,7 @@ class TerminalTools:
         cmd = ""
         if (root / "pyproject.toml").exists() or (root / "requirements.txt").exists():
             target_str = f" {test_path}" if test_path else ""
-            cmd = f"pytest{target_str}"
+            cmd = f"{self._get_pytest_cmd()}{target_str}"
         elif (root / "package.json").exists():
             cmd = "npm test"
         elif (root / "Cargo.toml").exists():
@@ -59,7 +83,7 @@ class TerminalTools:
         elif (root / "go.mod").exists():
             cmd = "go test ./..."
         else:
-            cmd = "pytest"
+            cmd = f"{self._get_pytest_cmd()}"
 
         return self.execute_command(cmd, timeout=timeout)
 
@@ -107,4 +131,6 @@ class TerminalTools:
         return self.execute_command(cmd, timeout=timeout)
 
     def inspect_process(self, process_name: str) -> dict[str, Any]:
+        if os.name == "nt":
+            return self.execute_command(f'tasklist /FI "IMAGENAME eq {process_name}*"')
         return self.execute_command(f"ps aux | grep {process_name}")

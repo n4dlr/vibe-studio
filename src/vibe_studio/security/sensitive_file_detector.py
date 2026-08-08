@@ -31,7 +31,11 @@ class SensitiveFileDetector:
         file_name = Path(target).name.lower()
         if file_name in SENSITIVE_NAMES:
             return True
-        return any(marker in target for marker in [".pem", ".key", ".p12", ".env", "secret", "credential", "id_rsa"])
+        if file_name.startswith(".env") or file_name.endswith((".pem", ".key", ".p12", ".pkcs12")):
+            return True
+        if any(marker in file_name for marker in ["id_rsa", "id_ed25519", "credentials.json", "firebase-adminsdk"]):
+            return True
+        return False
 
     @staticmethod
     def flag_if_needed(path: str | Path) -> bool:

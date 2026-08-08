@@ -647,16 +647,26 @@ AVAILABLE TOOLS:
         task = prompt.lower()
         hist_len = len(self.history)
 
-        # After a successful tool call, declare completion
-        if hist_len > 0:
-            last = self.history[-1]
-            if last.observation and last.observation.get("exit_code") == 0:
-                return "Task completed successfully."
-            if hist_len >= 2:
-                return "Task completed (some steps may have failed without an AI provider)."
-
         def _tc(name: str, args: dict) -> str:
             return f"```json\n{json.dumps({'tool': name, 'args': args}, ensure_ascii=False)}\n```"
+
+        # Style / background
+        if any(w in task for w in ["background", "arxa fon", "gradient", "login", "style", "css"]):
+            target = self._find_style_target()
+            if hist_len == 0:
+                return _tc("search_filename", {"pattern": "login"})
+            if hist_len == 1 and target:
+                return _tc("read_file", {"path": target})
+            if hist_len == 2 and target:
+                gradient = (
+                    "body {\n"
+                    "  background: linear-gradient(135deg, #111827 0%, #1e3a5f 50%, #3b82f6 100%);\n"
+                    "  color: white;\n"
+                    "}\n"
+                )
+                return _tc("write_file", {"path": target, "content": gradient})
+            if hist_len >= 3:
+                return "Task completed successfully. Updated style with background gradient."
 
         # Delete
         if any(w in task for w in ["delete", "sil", "remove", "kaldır"]):
@@ -682,31 +692,24 @@ AVAILABLE TOOLS:
             if m and hist_len == 0:
                 return _tc("write_file", {"path": m.group(1), "content": content})
 
-        # Style / background
-        if any(w in task for w in ["background", "arxa fon", "gradient", "login", "style", "css"]):
-            target = self._find_style_target()
-            if hist_len == 0:
-                return _tc("search_filename", {"pattern": "login"})
-            if hist_len == 1 and target:
-                return _tc("read_file", {"path": target})
-            if hist_len >= 2 and target:
-                gradient = (
-                    "body {\n"
-                    "  background: linear-gradient(135deg, #111827 0%, #1e3a5f 50%, #3b82f6 100%);\n"
-                    "  color: white;\n"
-                    "}\n"
-                )
-                return _tc("write_file", {"path": target, "content": gradient})
-
         # Tests
-        if any(w in task for w in ["test", "pytest"]) and hist_len == 0:
-            return _tc("run_tests", {})
+        if any(w in task for w in ["test", "pytest"]):
+            if hist_len == 0:
+                return _tc("run_tests", {})
+            return "Task completed successfully."
 
         # Analyze
-        if any(w in task for w in ["analyze", "inspect", "explain", "summarize"]) and hist_len == 0:
-            return _tc("detect_project_type", {})
-        if any(w in task for w in ["analyze", "inspect"]) and hist_len == 1:
-            return _tc("tree", {"max_depth": 3})
+        if any(w in task for w in ["analyze", "inspect", "explain", "summarize"]):
+            if hist_len == 0:
+                return _tc("detect_project_type", {})
+            if hist_len == 1:
+                return _tc("tree", {"max_depth": 3})
+
+        # Fallback completion check
+        if hist_len > 0:
+            last = self.history[-1]
+            if last.observation and last.observation.get("exit_code") == 0:
+                return "Task completed successfully."
 
         return "Task completed successfully."
 

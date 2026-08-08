@@ -72,14 +72,22 @@ class PatchTools:
         old_content = target_path.read_text(encoding="utf-8", errors="replace")
 
         if target_text not in old_content:
-            # Try normalised whitespace match to give useful feedback
-            stripped_target = " ".join(target_text.split())
-            stripped_content = " ".join(old_content.split())
-            hint = "(found with whitespace differences)" if stripped_target in stripped_content else ""
-            raise ValueError(
-                f"Target text not found verbatim in '{path}'. {hint}"
-                "\nTip: use read_file to get the exact current content before patching."
-            )
+            # Normalize line endings (\r\n vs \n)
+            target_crlf = target_text.replace("\r\n", "\n").replace("\n", "\r\n")
+            target_lf = target_text.replace("\r\n", "\n")
+            if target_crlf in old_content:
+                target_text = target_crlf
+            elif target_lf in old_content:
+                target_text = target_lf
+            else:
+                # Try normalised whitespace match to give useful feedback
+                stripped_target = " ".join(target_text.split())
+                stripped_content = " ".join(old_content.split())
+                hint = "(found with whitespace differences)" if stripped_target in stripped_content else ""
+                raise ValueError(
+                    f"Target text not found verbatim in '{path}'. {hint}"
+                    "\nTip: use read_file to get the exact current content before patching."
+                )
 
         new_content = old_content.replace(target_text, replacement_text, 1)
         target_path.write_text(new_content, encoding="utf-8")
@@ -97,7 +105,7 @@ class PatchTools:
     def replace_text(self, path: str, old_str: str, new_str: str) -> dict[str, Any]:
         return self.patch_file(path, old_str, new_str)
 
-    def insert_text(self, path: str, position_text: str, text_to_insert: str, after: bool = True) -> dict[str, Any]:
+    def insert_text(self, path: str, position_text: str, text_to_insert: str, after: bool = True) -> dict[str, True]:
         target_path = self._resolve(path)
         old_content = target_path.read_text(encoding="utf-8", errors="replace") if target_path.exists() else ""
 
@@ -105,7 +113,14 @@ class PatchTools:
             new_content = old_content + "\n" + text_to_insert if old_content else text_to_insert
         else:
             if position_text not in old_content:
-                raise ValueError(f"Position text '{position_text}' not found in {path}")
+                pos_crlf = position_text.replace("\r\n", "\n").replace("\n", "\r\n")
+                pos_lf = position_text.replace("\r\n", "\n")
+                if pos_crlf in old_content:
+                    position_text = pos_crlf
+                elif pos_lf in old_content:
+                    position_text = pos_lf
+                else:
+                    raise ValueError(f"Position text '{position_text}' not found in {path}")
             if after:
                 replacement = position_text + "\n" + text_to_insert
             else:
@@ -138,7 +153,14 @@ class PatchTools:
             target = patch.get("target", "")
             replacement = patch.get("replacement", "")
             if target not in current_content:
-                raise ValueError(f"Target block '{target[:30]}...' not found in {path}")
+                t_crlf = target.replace("\r\n", "\n").replace("\n", "\r\n")
+                t_lf = target.replace("\r\n", "\n")
+                if t_crlf in current_content:
+                    target = t_crlf
+                elif t_lf in current_content:
+                    target = t_lf
+                else:
+                    raise ValueError(f"Target block '{target[:30]}...' not found in {path}")
             current_content = current_content.replace(target, replacement, 1)
 
         target_path.write_text(current_content, encoding="utf-8")
