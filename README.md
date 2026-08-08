@@ -120,10 +120,13 @@ vibe_studio/
 │   ├── project_memory.py      # Per-project persistent memory
 │   └── settings.py            # AppSettings, SettingsStore
 ├── editor/
-│   ├── editor_widget.py       # QPlainTextEdit with line numbers, syntax highlighting
+│   ├── editor_widget.py       # QPlainTextEdit with line numbers, syntax highlighting, QCompleter
+│   ├── lsp_client.py          # JSON-RPC 2.0 stdio LSP client (pylsp, pyright, tsserver, gopls, clangd)
+│   ├── code_intelligence.py   # Code intelligence engine with live LSP + AST/Regex fallback
 │   ├── syntax_highlighter.py  # Multi-language highlighter
 │   └── diff_viewer.py         # Unified diff viewer (accept/reject)
 ├── filesystem/
+│   ├── file_watcher.py        # Real-time QFileSystemWatcher with 300ms debounced auto-refresh
 │   └── project_manager.py     # Project open/close
 ├── git/
 │   └── git_service.py         # Git status helper
@@ -272,8 +275,9 @@ pytest tests/test_integration.py  # will use running Ollama if available
 
 ## Completed 9/10 Production IDE Capabilities & Architecture
 
+- **Real LSP Protocol & Fallback (`LSPClient`)**: Native JSON-RPC 2.0 stdio client (`src/vibe_studio/editor/lsp_client.py`) connecting to live language servers (`pylsp`, `pyright`, `typescript-language-server`, `gopls`, `rust-analyzer`, `clangd`). Automatically falls back to AST (Python) and regex symbol indexing when language server binaries are not installed.
 - **Multi-Agent Orchestration**: `AgentOrchestrator` (`src/vibe_studio/agents/orchestrator.py`) coordinates `IntentPredictor`, `NavigatorAgent`, `ContextEngine`, `AutonomousAgent`, `ReviewerAgent`, and `DebugAssistant` into a unified pipeline.
-- **Code Intelligence & Autocomplete**: AST (Python) and multi-language symbol index providing Go-to-Definition (`F12`), Hover docstrings, Find References, and `QCompleter` autocomplete (`Ctrl+Space`).
+- **Code Intelligence & Autocomplete**: Go-to-Definition (`F12`), Hover docstrings, Find References, and `QCompleter` autocomplete (`Ctrl+Space`).
 - **Real-Time File Watching**: `WorkspaceFileWatcher` (`src/vibe_studio/filesystem/file_watcher.py`) auto-refreshes file explorer, Git status, and open editor tabs on external disk modifications.
 - **Large-Project Context Engine**: Import-graph dependency ranking and token-budgeted scoring select relevant files accurately for projects with 1000+ files.
 - **Offline & Model Fallback**: Graceful fallback to deterministic rule-based execution when Ollama or remote LLM APIs are offline.
