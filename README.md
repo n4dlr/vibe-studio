@@ -1,110 +1,176 @@
-# Vibe Studio
+# Vibe Studio — Autonomous AI Desktop IDE
 
-Vibe Studio is a local-first, AI-assisted desktop coding IDE for Linux and Windows. It is designed to help developers open a project, inspect it, reason about the correct changes, and make edits with approval gates and a secure command layer.
+> **A local-first, production-grade AI-powered coding IDE built with PySide6.**  
+> Understands your codebase, executes real tools, edits files, runs tests, and self-corrects — all autonomously.
+
+---
+
+## What is Vibe Studio?
+
+Vibe Studio is a VS Code-inspired desktop IDE where an autonomous AI agent actively helps you write, debug, refactor, and understand code. Unlike simple chat-based assistants, the agent:
+
+- **Reads and edits your actual files** — no copy-paste needed
+- **Runs tests and fixes failures automatically**
+- **Searches symbols, imports, and references** across the whole project
+- **Executes shell commands, linters, and formatters**
+- **Uses Git** — diffs, logs, branches, commits
+- **Self-corrects on errors** — if a tool fails, the agent retries with a fix
+- **Works fully offline** with a local Ollama instance
+
+---
 
 ## Features
 
-- Modern PySide6 desktop interface inspired by professional IDE layouts
-- Project explorer with file and folder operations
-- Basic code editor with tabbed editing and unsaved state tracking
-- Local project indexing and dependency detection
-- Context ranking for relevant files, symbols, and recent changes
-- AI provider abstraction for local Ollama and OpenAI-compatible APIs
-- Safe command execution with destructive-command restrictions
-- Git integration for status, diff, and basic history operations
-- Test detection and execution using common project tooling
-- Structured logging and settings persistence
-- Local-first operation with optional cloud provider support
+### 🤖 Autonomous AI Agent
+- 11-state finite state machine: `IDLE → ANALYZING → PLANNING → EXECUTING → OBSERVING → VALIDATING → FIXING → COMPLETED`
+- Multi-step tool execution loop (up to 15 iterations per task)
+- Natural language task understanding (English, Azerbaijani, and other languages)
+- Self-correction loop — automatically retries on test or build failures
+- Three autonomy modes: **Auto**, **Plan** (wait for approval), **Ask** (confirm each step)
 
-## Installation
+### 🛠️ Full Tool Suite
+| Category | Tools |
+|----------|-------|
+| **Filesystem** | `create_file`, `read_file`, `write_file`, `delete_file`, `move_file`, `copy_file`, `rename_file`, `tree` |
+| **Search** | `search_text`, `search_regex`, `search_filename`, `search_symbol`, `find_references`, `find_definition` |
+| **Code Analysis** | `detect_language`, `detect_framework`, `detect_dependencies`, `detect_entry_points`, `detect_test_framework` |
+| **Editing** | `patch_file`, `replace_text`, `insert_text`, `delete_text` |
+| **Terminal** | `execute_command`, `run_tests`, `run_linter`, `run_formatter`, `run_build` |
+| **Git** | `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit`, `git_checkout` |
 
-### Option 1: using requirements.txt
+### 🖥️ VS Code-like Desktop Interface
+- **Left sidebar**: File Explorer + Git panel
+- **Center**: Multi-tab code editor with syntax highlighting and line numbers
+- **Right dock**: AI chat, live agent activity feed, model/mode selector, Stop and Undo buttons
+- **Bottom panel**: Multi-tab terminal, Problems list, Test Runner
+- **Command Palette**: `Ctrl+Shift+P`
+- **Right-click AI actions**: Explain, Fix, Refactor, Generate Tests, Add Documentation
+- **Diff Viewer**: Side-by-side unified diff with Accept/Reject
+
+### 🔒 Security
+- **Workspace sandboxing** — all file operations are restricted to your project directory (path traversal blocked)
+- **Secret redaction** — API keys and tokens are stripped from prompts before sending to any LLM
+- **Risk-level command classifier** — `LOW / MEDIUM / HIGH / CRITICAL` with destructive command blocking
+- **Sensitive file detection** — `.env`, credentials, SSH keys flagged before AI access
+
+### 🔌 AI Provider Support
+- **Ollama** (local) — automatic model discovery, auto-selects a running model if the default is unavailable
+- **OpenAI-compatible** — any OpenAI API endpoint (GPT-4, Claude via proxy, etc.)
+- Streaming responses with live activity feed
+
+---
+
+## Quick Start
+
+### 1. Install dependencies
 
 ```bash
 python -m venv .venv
-# Linux/macOS
-source .venv/bin/activate
-# Windows (PowerShell)
-# .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m vibe_studio
-```
-
-### Option 2: editable install
-
-```bash
-python -m venv .venv
-# Linux/macOS
-source .venv/bin/activate
-# Windows (PowerShell)
-# .\.venv\Scripts\Activate.ps1
+source .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 pip install -e .
+```
+
+### 2. Set up Ollama (recommended for local use)
+
+```bash
+# Install from https://ollama.com, then pull a model:
+ollama pull qwen2.5-coder:7b      # Good balance of speed and quality
+# or
+ollama pull qwen3:8b
+# or
+ollama pull deepseek-coder-v2:lite
+```
+
+Vibe Studio connects to `http://127.0.0.1:11434` automatically and populates the model selector.
+
+### 3. Launch
+
+```bash
 python -m vibe_studio
 ```
 
-## Ollama setup
+---
 
-1. Install Ollama from https://ollama.com.
-2. Start the local server.
-3. Verify the default endpoint: `http://127.0.0.1:11434`
-4. Pull models, for example:
+## Example Tasks
 
-```bash
-ollama pull llama3.1
+Type these directly into the AI chat input:
+
+```
+Analyze this project and summarize the architecture.
+Run the tests and automatically fix any failures.
+Create a file with numbers 1 to 20, one per line.
+Delete numbers.txt
+Login page-in backgroundunu dəyiş.        ← Azerbaijani works too
+Bu layihədə bütün TypeScript errorlarını düzəlt.
+Add dark mode to this page.
+Refactor the auth module to use dependency injection.
 ```
 
-The application checks the endpoint automatically and shows available models in the model manager.
+---
 
-## API setup
-
-Configure an OpenAI-compatible provider through the app settings. Keep API keys in environment variables whenever possible, such as:
+## OpenAI / Custom API Setup
 
 ```bash
-export OPENAI_API_KEY="..."
-export CUSTOM_API_KEY="..."
+export OPENAI_API_KEY="sk-..."
+export CUSTOM_API_KEY="..."        # For custom OpenAI-compatible endpoints
 ```
 
-## Security principles
+Configure the base URL through the app Settings dialog.
 
-- No API keys are logged.
-- Destructive shell commands are blocked by default.
-- Local-only mode prevents cloud requests.
-- Sensitive files are flagged before external AI calls.
+---
 
 ## Development
 
 ```bash
-pip install -r requirements.txt
 pip install -e .[dev]
-pytest
+pytest                              # Run all 15 tests
+pytest tests/test_tools.py -v       # Run specific test file
 ```
 
-## Packaging
+### Running tests (headless)
 
-The package is prepared for local installation and desktop execution. It is intentionally designed so the logic can be separated from GUI concerns for future mobile or CLI reuse.
+```bash
+QT_QPA_PLATFORM=offscreen pytest tests/
+```
+
+---
+
+## Project Structure
+
+```
+src/vibe_studio/
+├── agents/         ← Autonomous agent state machine & execution loop
+├── ai/             ← ChatService, ModelManager
+├── app/            ← MainWindow (VS Code-like desktop layout)
+├── context/        ← Multi-factor relevance ranking for prompt context
+├── core/           ← Settings, command safety, project memory
+├── editor/         ← Code editor, syntax highlighter, diff viewer
+├── providers/      ← Ollama, OpenAI-compatible providers
+├── project/        ← Multi-ecosystem project scanner (AST + regex)
+├── security/       ← Path sandboxing, secret redaction
+├── terminal/       ← Embedded terminal widget
+├── tools/          ← Full tool suite (filesystem, search, git, terminal, patch)
+└── ui/             ← Command palette, panels, activity feed
+```
+
+---
 
 ## Troubleshooting
 
-- If PySide6 fails to install, upgrade pip and install the project again.
-- If Ollama is unavailable, configure another provider in Settings.
-- If a project folder cannot be opened, ensure the path exists and is readable.
-- If Qt fails with an xcb plugin error on Linux, install the runtime library:
+| Problem | Solution |
+|---------|----------|
+| `xcb plugin error` on Linux | `sudo apt-get install -y libxcb-cursor0` |
+| No desktop session | Set `QT_QPA_PLATFORM=offscreen` (auto-detected) |
+| Ollama unavailable | Configure OpenAI-compatible provider in Settings |
+| Model not loading | Vibe Studio auto-selects another running model |
+| PySide6 install fails | `pip install --upgrade pip && pip install PySide6` |
 
-```bash
-sudo apt-get update
-sudo apt-get install -y libxcb-cursor0
-```
-
-If no desktop session is available, the app automatically falls back to the offscreen Qt platform.
+---
 
 ## License
 
-This project is licensed under the MIT License.
-
-MIT License
-
-Copyright (c) 2026 Vibe Studio
+MIT License — Copyright (c) 2026 Vibe Studio
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -123,5 +189,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-

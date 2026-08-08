@@ -70,6 +70,56 @@ class ToolRegistry:
     def get(self, name: str) -> ToolDefinition | None:
         return self._tools.get(name)
 
+    # Tools that mutate files — we snapshot before execution so undo always works
+    _FILE_MUTATION_TOOLS = {
+        "create_file", "write_file", "delete_file",
+        "patch_file", "replace_text", "insert_text", "delete_text",
+        "move_file", "rename_file",
+    }
+
+    def _snapshot_before(self, name: str, args: dict[str, Any]) -> None:
+        """Record a PatchTools snapshot before a file-mutating tool runs."""
+        if name not in self._FILE_MUTATION_TOOLS:
+            return
+        path_str = args.get("path") or args.get("source") or ""
+        if not path_str:
+            return
+        try:
+            from vibe_studio.tools.patch_tools import FileChangeSnapshot
+            target = self.patch_tools._resolve(path_str)
+            old_content = target.read_text(encoding="utf-8", errors="replace") if target.exists() else ""
+            rel = target.relative_to(self.workspace_root).as_posix() if target.exists() else str(path_str)
+            # Store a preliminary snapshot; new_content will be empty until after execution
+            # We use _record_snapshot with empty new_content — undo just needs old_content
+            snapshot = FileChangeSnapshot(
+                path=rel,
+                previous_content=old_content,
+                new_content="",  # updated after execution
+                diff="",
+                hash_before=self.patch_tools._hash(old_content),
+                hash_after="",
+            )
+            self.patch_tools.history.append(snapshot)
+        except Exception:
+            pass
+
+    def _snapshot_after(self, name: str, args: dict[str, Any]) -> None:
+        """Update the last snapshot with actual post-execution content."""
+        if name not in self._FILE_MUTATION_TOOLS or not self.patch_tools.history:
+            return
+        path_str = args.get("path") or args.get("source") or args.get("destination") or ""
+        if not path_str:
+            return
+        try:
+            target = self.patch_tools._resolve(path_str)
+            new_content = target.read_text(encoding="utf-8", errors="replace") if target.exists() else ""
+            snap = self.patch_tools.history[-1]
+            snap.new_content = new_content
+            snap.hash_after = self.patch_tools._hash(new_content)
+            snap.diff = self.patch_tools._diff(snap.path, snap.previous_content, new_content)
+        except Exception:
+            pass
+
     def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         tool = self.get(name)
         if not tool:
@@ -82,10 +132,12 @@ class ToolRegistry:
                 "files_changed": [],
             }
 
+        self._snapshot_before(name, args)
         start_time = time.monotonic()
         try:
             raw_res = tool.handler(**args)
             duration = time.monotonic() - start_time
+            self._snapshot_after(name, args)
 
             if isinstance(raw_res, dict) and "stdout" in raw_res:
                 return {
@@ -109,6 +161,9 @@ class ToolRegistry:
                 "data": raw_res,
             }
         except Exception as exc:
+            # Remove the dangling snapshot on failure — nothing was actually changed
+            if name in self._FILE_MUTATION_TOOLS and self.patch_tools.history:
+                self.patch_tools.history.pop()
             duration = time.monotonic() - start_time
             return {
                 "tool": name,
