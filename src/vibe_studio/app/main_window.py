@@ -152,6 +152,8 @@ class MainWindow(QMainWindow):
 
         # AI
         aim = mb.addMenu("&AI")
+        aim.addAction("Run Multi-Agent Task Orchestrator", lambda: self._run_ai_prompt(
+            "Execute full multi-agent task orchestrator on this project."))
         aim.addAction("Analyze Project", lambda: self._run_ai_prompt(
             "Analyze this project and summarize the architecture, tech stack, and important files."))
         aim.addAction("Find Bugs", lambda: self._run_ai_prompt(
@@ -167,6 +169,13 @@ class MainWindow(QMainWindow):
         aim.addAction("Generate Tests", lambda: self._run_ai_prompt(
             "Generate comprehensive unit tests for the main project modules."))
         aim.addAction("Stop Agent", self._stop_agent, QKeySequence("Escape"))
+
+        # Tools
+        tm = mb.addMenu("&Tools")
+        tm.addAction("Proactive Security & Performance Scan", self._run_proactive_scan)
+        tm.addAction("Discover Untested Functions", self._discover_untested_functions)
+        tm.addAction("Manage Plugins", self._manage_plugins)
+        tm.addAction("Export Memory Sync Bundle", self._export_sync_bundle)
 
         # Run
         rm = mb.addMenu("&Run")
@@ -649,9 +658,57 @@ class MainWindow(QMainWindow):
             "Git Status": self.refresh_git_status,
             "Git Diff": lambda: self._run_ai_prompt("Show me the current git diff."),
             "Settings": self.show_settings,
+            "Proactive Scan": self._run_proactive_scan,
+            "Untested Functions": self._discover_untested_functions,
+            "Plugins": self._manage_plugins,
+            "Export Sync": self._export_sync_bundle,
         }
         if title in dispatch:
             dispatch[title]()
+
+    def _run_proactive_scan(self) -> None:
+        folder = self.settings.project_path or str(Path.cwd())
+        from vibe_studio.agents.proactive_analyzer import ProactiveAnalyzer
+        analyzer = ProactiveAnalyzer(folder)
+        res = analyzer.run_analysis()
+        QMessageBox.information(
+            self, "Proactive Analysis",
+            f"Security Issues: {len(res.get('security_findings', []))}\n"
+            f"Performance Bottlenecks: {len(res.get('performance_findings', []))}\n"
+            f"Unpinned Dependencies: {len(res.get('dependency_findings', []))}"
+        )
+
+    def _discover_untested_functions(self) -> None:
+        folder = self.settings.project_path or str(Path.cwd())
+        from vibe_studio.agents.self_learning_tests import SelfLearningTests
+        slt = SelfLearningTests()
+        untested = slt.find_untested_functions(Path(folder))
+        QMessageBox.information(
+            self, "Untested Functions",
+            f"Found {len(untested)} functions without dedicated unit tests.\n"
+            f"Top example: {untested[0].function_name if untested else 'None'}"
+        )
+
+    def _manage_plugins(self) -> None:
+        folder = self.settings.project_path or str(Path.cwd())
+        from vibe_studio.plugin.plugin_manager import PluginManager
+        pm = PluginManager()
+        plugins = pm.discover_plugins()
+        QMessageBox.information(
+            self, "Plugins Manager",
+            f"Plugins Directory: ~/.vibe_studio/plugins/\n"
+            f"Discovered Plugins: {', '.join(plugins) if plugins else 'None'}"
+        )
+
+    def _export_sync_bundle(self) -> None:
+        folder = self.settings.project_path or str(Path.cwd())
+        from vibe_studio.cloud.sync_manager import SyncManager
+        sm = SyncManager(folder)
+        bundle = sm.export_sync_bundle()
+        QMessageBox.information(
+            self, "Memory Sync Bundle",
+            f"Exported Workspace Memory Bundle ({len(bundle)} bytes)."
+        )
 
     # ------------------------------------------------------------------
     # Model selector
