@@ -345,6 +345,16 @@ class AutonomousAgent:
             # Parse tool call
             tool_name, tool_args, thought = _parse_tool_call(response_text)
 
+            if self._cancel_requested:
+                self._set_state(AgentState.CANCELLED)
+                return AgentTaskResult(
+                    status=AgentState.CANCELLED,
+                    task=task,
+                    summary="Execution cancelled by user.",
+                    files_changed=sorted(files_changed),
+                    tool_history=self.history,
+                )
+
             if not tool_name:
                 # No more tool calls — agent is done
                 self._set_state(AgentState.REVIEWING)
