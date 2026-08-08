@@ -43,8 +43,19 @@ class PatchTools:
         )
         return "".join(diff_lines)
 
+    def _create_backup(self, path: str, content: str) -> None:
+        try:
+            backup_dir = self.workspace_root / ".vibe_studio_backup"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = path.replace("/", "_").replace("\\", "_")
+            backup_file = backup_dir / f"{safe_name}_{self._hash(content)}.bak"
+            backup_file.write_text(content, encoding="utf-8")
+        except Exception:
+            pass
+
     def _record_snapshot(self, path: str, old_content: str, new_content: str) -> FileChangeSnapshot:
         diff = self._diff(path, old_content, new_content)
+        self._create_backup(path, old_content)
         snapshot = FileChangeSnapshot(
             path=path,
             previous_content=old_content,
