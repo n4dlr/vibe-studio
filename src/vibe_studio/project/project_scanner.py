@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -76,6 +77,15 @@ class ProjectScanner:
             pm = self._detect_package_manager(path)
             if pm:
                 package_managers.add(pm)
+                # Infer language from package manager
+                if pm == "pip" and "python" not in languages:
+                    languages["python"] = languages.get("python", 0) + 1
+                elif pm in ("npm", "yarn", "pnpm") and "javascript/typescript" not in languages:
+                    languages["javascript/typescript"] = languages.get("javascript/typescript", 0) + 1
+                elif pm == "cargo" and "rust" not in languages:
+                    languages["rust"] = languages.get("rust", 0) + 1
+                elif pm == "go" and "go" not in languages:
+                    languages["go"] = languages.get("go", 0) + 1
 
             fw = self._detect_framework(rel, path)
             if fw:
@@ -149,22 +159,68 @@ class ProjectScanner:
             return "maven/gradle"
         return None
 
-    def _detect_framework(self, rel: str, path: Path) -> str | None:
+    def _detect_framework(self, rel: str, path: Path) -> str | None:  # noqa: C901
         lowered = rel.lower()
+        # Read package.json for JS/TS frameworks
+        if path.name == "package.json":
+            try:
+                data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+                deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+                if "next" in deps:
+                    return "nextjs"
+                if "react" in deps:
+                    return "react"
+                if "vue" in deps:
+                    return "vue"
+                if "@angular/core" in deps:
+                    return "angular"
+                if "svelte" in deps:
+                    return "svelte"
+                if "nuxt" in deps:
+                    return "nuxt"
+                if "express" in deps:
+                    return "express"
+                if "fastify" in deps:
+                    return "fastify"
+                if "electron" in deps:
+                    return "electron"
+            except Exception:
+                pass
+        # Python frameworks by import patterns in .py files
+        if path.suffix == ".py":
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")[:2000]
+                if "from django" in content or "import django" in content:
+                    return "django"
+                if "from flask" in content or "Flask(" in content:
+                    return "flask"
+                if "from fastapi" in content or "FastAPI(" in content:
+                    return "fastapi"
+                if "from starlette" in content:
+                    return "starlette"
+                if "PySide6" in content or "PyQt" in content:
+                    return "pyside6"
+                if "tkinter" in content:
+                    return "tkinter"
+            except Exception:
+                pass
+        # Folder-name / file-name heuristics
         if "django" in lowered:
             return "django"
         if "flask" in lowered:
             return "flask"
         if "fastapi" in lowered:
             return "fastapi"
-        if "react" in lowered or lowered.endswith((".jsx", ".tsx")):
+        if lowered.endswith((".jsx", ".tsx")):
             return "react"
-        if "next" in lowered:
+        if "next" in lowered and "pages" in lowered:
             return "nextjs"
         if "vue" in lowered:
             return "vue"
         if "angular" in lowered:
             return "angular"
+        if "svelte" in lowered:
+            return "svelte"
         if "pytest" in lowered:
             return "pytest"
         if "pyside6" in lowered or "pyqt" in lowered:

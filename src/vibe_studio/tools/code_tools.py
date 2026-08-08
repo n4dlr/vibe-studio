@@ -60,7 +60,6 @@ class CodeTools:
             build_systems.add("pip/setuptools")
             if (root / "pytest.ini").exists() or (root / "tests").exists():
                 test_frameworks.add("pytest")
-
         if (root / "package.json").exists():
             languages.add("javascript/typescript")
             build_systems.add("npm/yarn/pnpm")

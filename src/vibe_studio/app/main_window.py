@@ -288,8 +288,10 @@ class MainWindow(QMainWindow):
         self.chat.setFont(QFont("monospace", 11))
 
         self.activity_panel = AIActivityPanel()
+        self.changes_panel = _ChangesPanel()
         self._ai_tabs.addTab(self.chat, "💬 Chat")
         self._ai_tabs.addTab(self.activity_panel, "⚡ Activity")
+        self._ai_tabs.addTab(self.changes_panel, "📝 Changes")
         rl.addWidget(self._ai_tabs, 1)
 
         # Prompt input
@@ -540,6 +542,8 @@ class MainWindow(QMainWindow):
         self._set_status("Agent task completed.")
         # Refresh file tree and git panel after agent work
         self.refresh_git_status()
+        # Update changes panel with latest AI diffs
+        self._refresh_changes_panel()
 
     def _handle_agent_error(self, error: str) -> None:
         self.chat.append(f"<b style='color:#f87171;'>Error:</b> {error}\n")
@@ -556,6 +560,13 @@ class MainWindow(QMainWindow):
         self._set_status("Agent stop requested.")
         self.send_btn.setEnabled(True)
         self.send_btn.setText("▶  Send Task")
+
+    def _refresh_changes_panel(self) -> None:
+        """Populate the Changes panel with diffs from the most recent agent task."""
+        if not hasattr(self, "chat_service") or not self.chat_service._agent:
+            return
+        history = self.chat_service._agent.tool_registry.patch_tools.history
+        self.changes_panel.set_snapshots(history)
 
     def _undo_last_change(self) -> None:
         if self.chat_service.revert_last_change():
@@ -1001,3 +1012,93 @@ class SettingsDialog(QDialog):
         self.settings.providers = providers
         self.store.save(self.settings)
         self.accept()
+
+
+# ---------------------------------------------------------------------------
+# Changes panel — shows AI-applied diffs with accept/undo per file
+# ---------------------------------------------------------------------------
+
+class _ChangesPanel(QWidget):
+    """Shows the diff for each file changed by the most recent agent task."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        self.header = QLabel("No changes yet.")
+        self.header.setStyleSheet("color:#94a3b8;font-weight:bold;")
+        top_row.addWidget(self.header)
+        top_row.addStretch()
+        self.undo_all_btn = QPushButton("↩ Undo All")
+        self.undo_all_btn.setFixedHeight(26)
+        self.undo_all_btn.clicked.connect(self._undo_all)
+        top_row.addWidget(self.undo_all_btn)
+        layout.addLayout(top_row)
+
+        self.diff_view = QTextEdit()
+        self.diff_view.setReadOnly(True)
+        self.diff_view.setFont(QFont("monospace", 10))
+        self.diff_view.setStyleSheet(
+            "QTextEdit{background:#0a0e14;color:#d0d7de;border:1px solid #202a36;border-radius:4px;}"
+        )
+        layout.addWidget(self.diff_view)
+
+        self._snapshots: list = []
+
+    def set_snapshots(self, snapshots: list) -> None:
+        self._snapshots = list(snapshots)
+        if not self._snapshots:
+            self.header.setText("No AI changes in this session.")
+            self.diff_view.clear()
+            return
+
+        self.header.setText(f"{len(self._snapshots)} file change(s) by AI:")
+        html_parts: list[str] = []
+        for snap in self._snapshots:
+            diff = snap.diff or ""
+            if not diff:
+                continue
+            file_header = f"<b style='color:#38bdf8;'>─── {snap.path} ───</b><br>"
+            diff_html = _diff_to_html(diff)
+            html_parts.append(file_header + diff_html)
+
+        self.diff_view.setHtml(
+            "<pre style='font-family:monospace;font-size:10px;'>"
+            + "".join(html_parts)
+            + "</pre>"
+        )
+
+    def _undo_all(self) -> None:
+        main_win = self.window()
+        if not hasattr(main_win, "chat_service"):
+            return
+        cs = main_win.chat_service
+        if not cs._agent:
+            return
+        pt = cs._agent.tool_registry.patch_tools
+        count = 0
+        while pt.history:
+            pt.undo_last_change()
+            count += 1
+        self.header.setText(f"Reverted {count} change(s).")
+        self.diff_view.clear()
+        self._snapshots = []
+        main_win._set_status(f"Reverted {count} AI file change(s).")
+
+
+def _diff_to_html(diff: str) -> str:
+    lines = []
+    for line in diff.splitlines():
+        esc = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if line.startswith("+") and not line.startswith("+++"):
+            lines.append(f'<span style="color:#4ade80;background:#0d2b17;">{esc}</span><br>')
+        elif line.startswith("-") and not line.startswith("---"):
+            lines.append(f'<span style="color:#f87171;background:#2b0d0d;">{esc}</span><br>')
+        elif line.startswith("@@"):
+            lines.append(f'<span style="color:#38bdf8;">{esc}</span><br>')
+        else:
+            lines.append(f'<span style="color:#64748b;">{esc}</span><br>')
+    return "".join(lines)

@@ -1,14 +1,16 @@
-"""Multi-session terminal panel with command history, safe execution, and styled output."""
+"""Multi-session terminal panel — cross-platform shell detection, background execution, process tree kill."""
 from __future__ import annotations
 
-import re
+import os
+import platform
+import shutil
+import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QFont, QKeyEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -19,6 +21,35 @@ from PySide6.QtWidgets import (
 )
 
 from vibe_studio.core.command_safety import CommandSafety, RiskLevel
+
+
+# ---------------------------------------------------------------------------
+# Shell detection
+# ---------------------------------------------------------------------------
+
+def _detect_shell() -> tuple[str, list[str]]:
+    """
+    Return (shell_name, [shell, -flag]) for the best available shell on this platform.
+    """
+    system = platform.system()
+    if system == "Windows":
+        pwsh = shutil.which("pwsh") or shutil.which("powershell")
+        if pwsh:
+            return "PowerShell", [pwsh, "-Command"]
+        return "cmd", ["cmd", "/C"]
+    # Unix-like
+    preferred = ["zsh", "bash", "sh"]
+    user_shell = os.environ.get("SHELL", "")
+    if user_shell:
+        preferred.insert(0, user_shell)
+    for sh in preferred:
+        path = shutil.which(sh)
+        if path:
+            return Path(sh).name, [path, "-c"]
+    return "sh", ["sh", "-c"]
+
+
+_SHELL_NAME, _SHELL_CMD = _detect_shell()
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +65,7 @@ class _CommandRunner(QThread):
         self.command = command
         self.cwd = cwd
         self.timeout = timeout
+        self._proc: subprocess.Popen | None = None
 
     def run(self) -> None:
         result = CommandSafety.run(
@@ -43,6 +75,24 @@ class _CommandRunner(QThread):
         )
         self.output_ready.emit(result.stdout, result.stderr)
         self.done.emit(result.exit_code, result.duration)
+
+    def stop(self) -> None:
+        """Kill the process and its children."""
+        if self._proc and self._proc.poll() is None:
+            try:
+                if platform.system() == "Windows":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self._proc.pid)],
+                                   capture_output=True)
+                else:
+                    import signal as _signal
+                    os.killpg(os.getpgid(self._proc.pid), _signal.SIGTERM)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+        self.terminate()
+        self.wait(500)
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +109,7 @@ class TerminalSessionWidget(QWidget):
         self._history_index = 0
         self._runner: _CommandRunner | None = None
         self._setup_ui()
-        self._write_system(f"Working directory: {self.cwd}")
+        self._write_system(f"Shell: {_SHELL_NAME} | Working directory: {self.cwd}")
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -176,8 +226,7 @@ class TerminalSessionWidget(QWidget):
 
     def _stop(self) -> None:
         if self._runner and self._runner.isRunning():
-            self._runner.terminate()
-            self._runner.wait(500)
+            self._runner.stop()
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._write_system("Stopped.")

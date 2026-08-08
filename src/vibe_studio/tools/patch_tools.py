@@ -56,19 +56,30 @@ class PatchTools:
         self.history.append(snapshot)
         return snapshot
 
+    def check_conflict(self, path: str, expected_hash: str) -> bool:
+        """Return True if the file has been modified since expected_hash was recorded."""
+        target_path = self._resolve(path)
+        if not target_path.exists():
+            return False
+        current = target_path.read_text(encoding="utf-8", errors="replace")
+        return self._hash(current) != expected_hash
+
     def patch_file(self, path: str, target_text: str, replacement_text: str) -> dict[str, Any]:
         target_path = self._resolve(path)
         if not target_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
         old_content = target_path.read_text(encoding="utf-8", errors="replace")
+
         if target_text not in old_content:
-            # Fallback: check stripped whitespace match if exact match fails
-            old_lines = old_content.splitlines()
-            target_lines = [l.strip() for l in target_text.splitlines() if l.strip()]
-            if target_lines and any(target_lines[0] in l for l in old_lines):
-                raise ValueError(f"Target text was not found exactly in '{path}'. Make sure exact snippet and indentation match.")
-            raise ValueError(f"Target text not found in file: {path}")
+            # Try normalised whitespace match to give useful feedback
+            stripped_target = " ".join(target_text.split())
+            stripped_content = " ".join(old_content.split())
+            hint = "(found with whitespace differences)" if stripped_target in stripped_content else ""
+            raise ValueError(
+                f"Target text not found verbatim in '{path}'. {hint}"
+                "\nTip: use read_file to get the exact current content before patching."
+            )
 
         new_content = old_content.replace(target_text, replacement_text, 1)
         target_path.write_text(new_content, encoding="utf-8")

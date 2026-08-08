@@ -29,12 +29,18 @@ class GitTools:
     def git_status(self) -> str:
         return self._run_git(["status", "--short"])
 
-    def git_diff(self, file_path: str | None = None) -> str:
+    def git_diff(self, file_path: str | None = None, staged: bool = False) -> str:
         args = ["diff"]
+        if staged:
+            args.append("--cached")
         if file_path:
             target = PathSecurity.validate_workspace_path(self.workspace_root / file_path, self.workspace_root)
             args.extend(["--", target.relative_to(self.workspace_root).as_posix()])
         return self._run_git(args)
+
+    def git_unstage(self, path: str) -> str:
+        """Unstage a file (git reset HEAD <path>)."""
+        return self._run_git(["reset", "HEAD", "--", path])
 
     def git_log(self, limit: int = 10) -> str:
         return self._run_git(["log", f"-{limit}", "--oneline"])
