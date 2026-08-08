@@ -205,6 +205,75 @@ class DebugAssistant:
             confidence=0.1,
         )
 
+    def analyze_test_output(self, output: str) -> list[DebugAnalysis]:
+        """Analyze combined test runner output containing multiple failures.
+
+        Splits on common failure delimiters (pytest section headers, FAILED lines)
+        and returns one DebugAnalysis per failure block, ordered by confidence descending.
+        Returns an empty list when no failures are detected.
+        """
+        if not output.strip():
+            return []
+
+        analyses: list[DebugAnalysis] = []
+
+        # Heuristic: split on separator lines (===, ---) that delimit pytest failure sections
+        import re as _re
+        sections = _re.split(r"(?:={5,}|_{5,}|-{5,})\s+\S+", output)
+        if len(sections) <= 1:
+            # Single block — just analyze directly
+            result = self.analyze_traceback(output)
+            if result.error_type != "UnknownError" or result.confidence > 0.1:
+                analyses.append(result)
+            return analyses
+
+        for section in sections[1:]:  # skip preamble
+            section = section.strip()
+            if not section:
+                continue
+            result = self.analyze_traceback(section)
+            if result.error_type != "UnknownError" or result.confidence > 0.1:
+                analyses.append(result)
+
+        # Deduplicate by (error_type, file_path, line_number)
+        seen: set[tuple[str, str, int]] = set()
+        unique: list[DebugAnalysis] = []
+        for a in analyses:
+            key = (a.error_type, a.file_path, a.line_number)
+            if key not in seen:
+                seen.add(key)
+                unique.append(a)
+
+        return sorted(unique, key=lambda a: a.confidence, reverse=True)
+
+    def find_fix_location(
+        self,
+        analysis: DebugAnalysis,
+        workspace_root: str | None = None,
+    ) -> dict[str, int | str]:
+        """Return the most actionable fix location from a DebugAnalysis.
+
+        Returns a dict with keys: ``file``, ``line``, ``error_type``, ``message``.
+        When *workspace_root* is provided and the file path is absolute, the returned
+        path is made relative to the workspace root.
+        """
+        file_path = analysis.file_path
+        if workspace_root and file_path:
+            from pathlib import Path as _Path
+            try:
+                file_path = str(_Path(file_path).relative_to(_Path(workspace_root)))
+            except ValueError:
+                pass  # keep original if not under workspace
+
+        return {
+            "file": file_path,
+            "line": analysis.line_number,
+            "error_type": analysis.error_type,
+            "message": analysis.error_message,
+            "runtime": analysis.runtime.value,
+            "confidence": analysis.confidence,
+        }
+
     # ------------------------------------------------------------------
     # Language parsers
     # ------------------------------------------------------------------

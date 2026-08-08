@@ -361,6 +361,19 @@ class ToolRegistry:
             {"path": S("string", "Python file path")},
             self.code_analysis_tools.get_complexity_score, risk=R.SAFE)
 
+        self.register("get_dead_code", "Find potentially dead (unreferenced) functions and classes in a Python file",
+            {"path": S("string", "Python file path to inspect for dead code")},
+            self.code_analysis_tools.get_dead_code, risk=R.SAFE)
+
+        self.register("get_import_graph", "Build a workspace-internal module import dependency graph",
+            {},
+            self.code_analysis_tools.get_import_graph, risk=R.SAFE)
+
+        self.register("count_lines_of_code", "Count SLOC, blank lines, and comment lines for any source file",
+            {"path": S("string", "Source file path")},
+            self.code_analysis_tools.count_lines_of_code, risk=R.SAFE)
+
+
         self.register("search_import", "Find imports of a module",
             {"module_name": S("string", "Module or package name")},
             self.search_tools.search_import, risk=R.SAFE)
@@ -368,6 +381,40 @@ class ToolRegistry:
         self.register("find_usages", "Find all usages of a symbol (alias for find_references)",
             {"symbol_name": S("string", "Symbol name")},
             self.search_tools.find_references, risk=R.SAFE)
+
+        # ── Semantic LSP Agent Tools ─────────────────────────────────
+        self.register("lsp_goto_definition", "Semantic LSP Go-to-Definition with AST fallback",
+            {"file_path": S("string", "File path"),
+             "line": S("integer", "Line number (1-indexed)", False, 1),
+             "column": S("integer", "Column number (0-indexed)", False, 0),
+             "symbol": S("string", "Symbol name", False, "")},
+            self.code_tools.lsp_goto_definition, risk=R.SAFE)
+
+        self.register("lsp_find_references", "Semantic LSP Find References with regex fallback",
+            {"file_path": S("string", "File path"),
+             "line": S("integer", "Line number (1-indexed)", False, 1),
+             "column": S("integer", "Column number (0-indexed)", False, 0),
+             "symbol": S("string", "Symbol name", False, "")},
+            self.code_tools.lsp_find_references, risk=R.SAFE)
+
+        self.register("lsp_hover", "Semantic LSP Hover documentation with AST fallback",
+            {"file_path": S("string", "File path"),
+             "line": S("integer", "Line number (1-indexed)", False, 1),
+             "column": S("integer", "Column number (0-indexed)", False, 0),
+             "symbol": S("string", "Symbol name", False, "")},
+            self.code_tools.lsp_hover, risk=R.SAFE)
+
+        self.register("lsp_get_diagnostics", "Get live LSP syntax and type diagnostics for a file",
+            {"file_path": S("string", "File path")},
+            self.code_tools.lsp_get_diagnostics, risk=R.SAFE)
+
+        self.register("lsp_document_symbols", "Extract document symbols using LSP or AST scanner",
+            {"file_path": S("string", "File path")},
+            self.code_tools.lsp_document_symbols, risk=R.SAFE)
+
+        self.register("lsp_workspace_symbols", "Search workspace-wide symbols using LSP or ProjectScanner",
+            {"query": S("string", "Symbol search query")},
+            self.code_tools.lsp_workspace_symbols, risk=R.SAFE)
 
         # ── Patch / editing ───────────────────────────────────────────
         self.register("patch_file",

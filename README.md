@@ -273,11 +273,17 @@ pytest tests/test_integration.py  # will use running Ollama if available
 
 ---
 
-## Completed 9/10 Production IDE Capabilities & Architecture
+## Completed Production IDE Capabilities & Architecture
 
-- **Real LSP Protocol & Fallback (`LSPClient`)**: Native JSON-RPC 2.0 stdio client (`src/vibe_studio/editor/lsp_client.py`) connecting to live language servers (`pylsp`, `pyright`, `typescript-language-server`, `gopls`, `rust-analyzer`, `clangd`). Automatically falls back to AST (Python) and regex symbol indexing when language server binaries are not installed.
+- **Production-Grade LSP Protocol & Fallback Engine (`LSPClient` & `CodeIntelligenceEngine`)**:
+  - **LSP-First Router**: `CodeIntelligenceEngine` routes all definition, references, hover, completion, document symbols, and workspace symbols through LSP servers when available and healthy, seamlessly falling back to AST (Python) and regex symbol indexing when LSP servers are missing or timed out.
+  - **Server Discovery (`LSPServerRegistry`)**: Automatic discovery and metadata management for `pyright-langserver`, `pylsp`, `typescript-language-server`, `gopls`, `rust-analyzer`, `clangd`, and `vscode-langservers-extracted`.
+  - **Monotonic Document Synchronization**: Maintains `DocumentState` with monotonic version increments across `didOpen`, `didChange`, `didSave`, and `didClose` notifications.
+  - **Diagnostics & Problems UI Integration**: Live `textDocument/publishDiagnostics` streaming to the Problems Panel and editor decorations with click-to-navigate.
+  - **Stale Response Protection & Async UI Safety**: GUI thread never freezes; all LSP requests feature timeouts and stale-version guards.
+  - **Agent Semantic Tools**: Exposes `lsp_goto_definition`, `lsp_find_references`, `lsp_hover`, `lsp_get_diagnostics`, `lsp_document_symbols`, and `lsp_workspace_symbols` to the `AutonomousAgent`.
 - **Multi-Agent Orchestration**: `AgentOrchestrator` (`src/vibe_studio/agents/orchestrator.py`) coordinates `IntentPredictor`, `NavigatorAgent`, `ContextEngine`, `AutonomousAgent`, `ReviewerAgent`, and `DebugAssistant` into a unified pipeline.
 - **Code Intelligence & Autocomplete**: Go-to-Definition (`F12`), Hover docstrings, Find References, and `QCompleter` autocomplete (`Ctrl+Space`).
-- **Real-Time File Watching**: `WorkspaceFileWatcher` (`src/vibe_studio/filesystem/file_watcher.py`) auto-refreshes file explorer, Git status, and open editor tabs on external disk modifications.
+- **Real-Time File Watching**: `WorkspaceFileWatcher` (`src/vibe_studio/filesystem/file_watcher.py`) auto-refreshes file explorer, Git status, and open editor tabs on external disk modifications, invalidating symbol caches while protecting unsaved user edits.
 - **Large-Project Context Engine**: Import-graph dependency ranking and token-budgeted scoring select relevant files accurately for projects with 1000+ files.
 - **Offline & Model Fallback**: Graceful fallback to deterministic rule-based execution when Ollama or remote LLM APIs are offline.

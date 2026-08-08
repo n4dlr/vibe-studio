@@ -154,3 +154,58 @@ class CodeTools:
                 except Exception:
                     pass
         return configs
+
+    # ------------------------------------------------------------------
+    # Agent Semantic LSP Tools
+    # ------------------------------------------------------------------
+
+    def lsp_goto_definition(self, file_path: str, line: int = 1, column: int = 0, symbol: str = "") -> list[dict[str, Any]]:
+        target = PathSecurity.validate_workspace_path(file_path, self.workspace_root)
+        from vibe_studio.editor.code_intelligence import CodeIntelligenceEngine
+        engine = CodeIntelligenceEngine(self.workspace_root)
+        defs = engine.find_definition(symbol=symbol, file_path=target, line=line, column=column)
+        return [
+            {"file": d.file, "line": d.line, "column": d.column, "symbol": d.symbol, "source": d.source}
+            for d in defs
+        ]
+
+    def lsp_find_references(self, file_path: str, line: int = 1, column: int = 0, symbol: str = "") -> list[dict[str, Any]]:
+        target = PathSecurity.validate_workspace_path(file_path, self.workspace_root)
+        from vibe_studio.editor.code_intelligence import CodeIntelligenceEngine
+        engine = CodeIntelligenceEngine(self.workspace_root)
+        return engine.find_references(symbol=symbol, current_file=target, line=line, column=column)
+
+    def lsp_hover(self, file_path: str, line: int = 1, column: int = 0, symbol: str = "") -> dict[str, Any]:
+        target = PathSecurity.validate_workspace_path(file_path, self.workspace_root)
+        from vibe_studio.editor.code_intelligence import CodeIntelligenceEngine
+        engine = CodeIntelligenceEngine(self.workspace_root)
+        hover_info = engine.get_hover_info(symbol=symbol, file_path=target, line=line, column=column)
+        if hover_info:
+            return {
+                "symbol": hover_info.symbol,
+                "kind": hover_info.kind,
+                "file": hover_info.file,
+                "line": hover_info.line,
+                "docstring": hover_info.docstring,
+                "source": hover_info.source,
+            }
+        return {"error": f"No hover info found for symbol '{symbol}'"}
+
+    def lsp_get_diagnostics(self, file_path: str) -> list[dict[str, Any]]:
+        target = PathSecurity.validate_workspace_path(file_path, self.workspace_root)
+        from vibe_studio.editor.code_intelligence import CodeIntelligenceEngine
+        engine = CodeIntelligenceEngine(self.workspace_root)
+        return engine.get_diagnostics(target)
+
+    def lsp_document_symbols(self, file_path: str) -> list[dict[str, Any]]:
+        target = PathSecurity.validate_workspace_path(file_path, self.workspace_root)
+        from vibe_studio.editor.code_intelligence import CodeIntelligenceEngine
+        engine = CodeIntelligenceEngine(self.workspace_root)
+        syms = engine.get_document_symbols(target)
+        return [{"name": s.name, "kind": s.kind, "file": s.file, "line": s.line} for s in syms]
+
+    def lsp_workspace_symbols(self, query: str) -> list[dict[str, Any]]:
+        from vibe_studio.editor.code_intelligence import CodeIntelligenceEngine
+        engine = CodeIntelligenceEngine(self.workspace_root)
+        syms = engine.get_workspace_symbols(query)
+        return [{"name": s.name, "kind": s.kind, "file": s.file, "line": s.line} for s in syms]

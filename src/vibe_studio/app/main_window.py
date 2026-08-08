@@ -752,7 +752,10 @@ class MainWindow(QMainWindow):
         # Activate real-time file watching and code intelligence
         self._file_watcher.set_workspace_root(folder)
         self._code_intelligence = CodeIntelligenceEngine(folder)
-        # Index is built lazily on first use
+        self._code_intelligence.on_diagnostics(self._on_lsp_diagnostics_received)
+        # Update LSP status on status bar
+        status_msg = self._code_intelligence.get_status("python")
+        self._set_status(f"Opened project: {folder} | {status_msg}")
 
     def open_file(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(self, "Open File")
@@ -809,6 +812,30 @@ class MainWindow(QMainWindow):
                 break
         if self._code_intelligence is not None:
             self._code_intelligence.invalidate_index()
+
+    def _on_lsp_diagnostics_received(self, uri: str, diagnostics: list[dict]) -> None:
+        """Receive live LSP diagnostics and push to ProblemsPanel."""
+        try:
+            rel_file = Path(uri.replace("file://", "")).relative_to(Path(self.settings.project_path or ".")).as_posix()
+        except ValueError:
+            rel_file = uri.replace("file://", "")
+
+        problems = []
+        for d in diagnostics:
+            sev_num = d.get("severity", 1)
+            sev_str = "Error" if sev_num == 1 else "Warning" if sev_num == 2 else "Info"
+            range_info = d.get("range", {})
+            start = range_info.get("start", {})
+            problems.append({
+                "severity": sev_str,
+                "message": d.get("message", ""),
+                "file": rel_file,
+                "line": start.get("line", 0) + 1,
+                "col": start.get("character", 0),
+                "source": "LSP",
+            })
+
+        self.problems_panel.set_problems(problems)
 
 
     def _save_current_editor(self) -> None:
