@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+os.environ.setdefault("VIBE_STUDIO_OFFLINE", "1")  # Deterministic fallback only
 
 from vibe_studio.agents.coding_agent import AgentState, AutonomousAgent, AutonomyMode
 

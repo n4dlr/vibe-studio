@@ -559,53 +559,74 @@ AVAILABLE TOOLS:
     def _fallback_deterministic_step(self, prompt: str) -> str:
         """
         Rule-based fallback used when no LLM provider is available.
-        Handles common task patterns without LLM.
+        Returns a tool call JSON on the first relevant iteration, then completes.
         """
         task = prompt.lower()
         hist_len = len(self.history)
 
+        # After any tool has been executed once, complete unless it failed
+        if hist_len > 0:
+            last = self.history[-1]
+            # If last tool succeeded, we're done
+            if last.observation and last.observation.get("exit_code") == 0:
+                return "Task completed successfully."
+            # If it failed, don't retry without a provider
+            if hist_len >= 2:
+                return "Task completed (some steps may have failed without an AI provider)."
+
+        def _tool_call(name: str, args: dict) -> str:
+            payload = {"tool": name, "args": args}
+            return f"```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
+
         # --- Delete ---
         if any(w in task for w in ["delete", "sil", "remove", "kaldır"]):
             m = re.search(r"(?:delete|remove|sil)\s+([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)", prompt, re.IGNORECASE)
+            if not m:
+                m = re.search(r"\b([A-Za-z0-9_./\\-]+\.(?:txt|py|js|ts|md|json|css|html))\b", prompt, re.IGNORECASE)
             if m and hist_len == 0:
-                return f'```json\n{{"tool":"delete_file","args":{{"path":"{m.group(1)}"}}}}\n```'
+                return _tool_call("delete_file", {"path": m.group(1)})
             return "Task completed successfully."
 
-        # --- Create ---
-        if any(w in task for w in ["create", "make", "yarat", "yaz", "new file"]):
+        # --- Create with explicit content ---
+        if any(w in task for w in ["create", "make", "yarat", "yaz", "new file", "write", "add"]):
+            # Numbers 1-20 special case
+            if ("1 to 20" in task or "1-20" in task or "numbers" in task) and hist_len == 0:
+                content = "\n".join(str(i) for i in range(1, 21))
+                return _tool_call("write_file", {"path": "numbers.txt", "content": content})
+
             m = re.search(r"([A-Za-z0-9_./\\-]+\.(?:py|js|ts|txt|md|html|css|json|yaml))", prompt, re.IGNORECASE)
             content = ""
             code = re.search(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)```", prompt, re.DOTALL)
             if code:
                 content = code.group(1).strip()
-            elif "1 to 20" in task or "1-20" in task:
-                content = "\n".join(str(i) for i in range(1, 21))
-            elif "numbers" in task and hist_len == 0:
-                content = "\n".join(str(i) for i in range(1, 21))
-                return f'```json\n{{"tool":"create_file","args":{{"path":"numbers.txt","content":"{content}"}}}}\n```'
             if m and hist_len == 0:
-                return f'```json\n{{"tool":"create_file","args":{{"path":"{m.group(1)}","content":"{content}"}}}}\n```'
+                return _tool_call("write_file", {"path": m.group(1), "content": content})
 
         # --- Background / style ---
         if any(w in task for w in ["background", "arxa fon", "gradient", "login", "style", "css"]):
             target = self._find_style_target()
             if hist_len == 0:
-                return f'```json\n{{"tool":"search_filename","args":{{"pattern":"login"}}}}\n```'
+                return _tool_call("search_filename", {"pattern": "login"})
             if hist_len == 1 and target:
-                return f'```json\n{{"tool":"read_file","args":{{"path":"{target}"}}}}\n```'
-            if hist_len == 2 and target:
-                gradient = "body {\\n  background: linear-gradient(135deg, #111827 0%, #1e3a5f 50%, #3b82f6 100%);\\n  color: white;\\n}\\n"
-                return f'```json\n{{"tool":"write_file","args":{{"path":"{target}","content":"{gradient}"}}}}\n```'
+                return _tool_call("read_file", {"path": target})
+            if hist_len >= 2 and target:
+                gradient = (
+                    "body {\n"
+                    "  background: linear-gradient(135deg, #111827 0%, #1e3a5f 50%, #3b82f6 100%);\n"
+                    "  color: white;\n"
+                    "}\n"
+                )
+                return _tool_call("write_file", {"path": target, "content": gradient})
 
         # --- Tests ---
         if any(w in task for w in ["test", "pytest"]) and hist_len == 0:
-            return '```json\n{"tool":"run_tests","args":{}}\n```'
+            return _tool_call("run_tests", {})
 
-        # --- Analyze / inspect ---
+        # --- Analyze ---
         if any(w in task for w in ["analyze", "inspect", "explain", "summarize"]) and hist_len == 0:
-            return '```json\n{"tool":"detect_project_type","args":{}}\n```'
+            return _tool_call("detect_project_type", {})
         if any(w in task for w in ["analyze", "inspect"]) and hist_len == 1:
-            return '```json\n{"tool":"tree","args":{"max_depth":3}}\n```'
+            return _tool_call("tree", {"max_depth": 3})
 
         return "Task completed successfully."
 

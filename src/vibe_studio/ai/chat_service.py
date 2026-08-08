@@ -50,19 +50,34 @@ class ChatService:
     # ------------------------------------------------------------------
 
     def _get_provider(self) -> OllamaProvider | OpenAICompatibleProvider | None:
+        # Allow test/CI environments to force offline (deterministic) mode
+        if os.getenv("VIBE_STUDIO_OFFLINE") == "1":
+            return None
+
         s = self.model_manager.settings
         if s.local_only or s.default_provider == "ollama":
             url = "http://127.0.0.1:11434"
             for p in s.providers:
                 if p.kind == "ollama":
                     url = p.base_url
-            provider = OllamaProvider(base_url=url, timeout=120)
-            if provider.test_connection():
-                return provider
+            # Fast connection check — 2s timeout to avoid hanging tests
+            import socket
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or 11434
+            try:
+                with socket.create_connection((host, port), timeout=2):
+                    pass
+                provider = OllamaProvider(base_url=url, timeout=120)
+                if provider.test_connection():
+                    return provider
+            except (OSError, Exception):
+                pass
             if s.local_only:
                 return None  # never fall through to remote
 
-        # OpenAI-compatible (or Ollama fallback)
+        # OpenAI-compatible
         api_key = ""
         api_url = "https://api.openai.com/v1"
         for p in s.providers:
@@ -74,12 +89,7 @@ class ChatService:
         if key:
             return OpenAICompatibleProvider(base_url=api_url, api_key=key, timeout=120)
 
-        # Last resort — try Ollama without connection check
-        url = "http://127.0.0.1:11434"
-        for p in s.providers:
-            if p.kind == "ollama":
-                url = p.base_url
-        return OllamaProvider(base_url=url, timeout=120)
+        return None
 
     # ------------------------------------------------------------------
     # Main chat entry point

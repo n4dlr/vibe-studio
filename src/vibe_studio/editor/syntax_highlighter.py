@@ -64,6 +64,26 @@ class MultiLanguageHighlighter(QSyntaxHighlighter):
             self.highlighting_rules.append((re.compile(r"\b\d+\.?\d*\b"), number_format))
             self.highlighting_rules.append((re.compile(r"\bfunction\s+([A-Za-z0-9_]+)"), func_format))
 
+        elif self.language in ("html", "htm"):
+            self.highlighting_rules.append((re.compile(r"<[^>]+>"), keyword_format))
+            self.highlighting_rules.append((re.compile(r"\"[^\"]*\"|'[^']*'"), string_format))
+            self.highlighting_rules.append((re.compile(r"<!--.*?-->", re.DOTALL), comment_format))
+
+        elif self.language in ("css", "scss"):
+            # Properties
+            prop_format = QTextCharFormat()
+            prop_format.setForeground(QColor("#9cdcfe"))
+            self.highlighting_rules.append((re.compile(r"\b[\w-]+(?=\s*:)"), prop_format))
+            self.highlighting_rules.append((re.compile(r"#[0-9a-fA-F]{3,8}\b"), number_format))
+            self.highlighting_rules.append((re.compile(r"/\*.*?\*/", re.DOTALL), comment_format))
+            self.highlighting_rules.append((re.compile(r'"[^"]*"|\'[^\']*\''), string_format))
+
+        elif self.language == "json":
+            self.highlighting_rules.append((re.compile(r'"[^"]*"\s*:'), keyword_format))
+            self.highlighting_rules.append((re.compile(r':\s*"[^"]*"'), string_format))
+            self.highlighting_rules.append((re.compile(r'\b(true|false|null)\b'), number_format))
+            self.highlighting_rules.append((re.compile(r'\b\d+\.?\d*\b'), number_format))
+
     def highlightBlock(self, text: str) -> None:
         for pattern, fmt in self.highlighting_rules:
             for match in pattern.finditer(text):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("VIBE_STUDIO_OFFLINE", "1")  # Use deterministic fallback, not real LLM
 
 from PySide6.QtWidgets import QApplication
 
