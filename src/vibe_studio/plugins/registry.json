@@ -1,0 +1,362 @@
+{
+  "plugins": [
+    {
+      "name": "docker_deploy",
+      "version": "1.0.0",
+      "category": "DevOps",
+      "description": "Docker build and container deployment tools",
+      "tools": [
+        "docker_build",
+        "docker_push",
+        "docker_run"
+      ],
+      "entry": "community/docker_deploy.py"
+    },
+    {
+      "name": "kubernetes",
+      "version": "1.0.0",
+      "category": "DevOps",
+      "description": "Kubernetes pod, deployment, and service management",
+      "tools": [
+        "kubectl_apply",
+        "kubectl_logs",
+        "kubectl_get_pods"
+      ],
+      "entry": "community/kubernetes.py"
+    },
+    {
+      "name": "terraform",
+      "version": "1.0.0",
+      "category": "DevOps",
+      "description": "Terraform plan, apply, and infrastructure provisioning",
+      "tools": [
+        "tf_plan",
+        "tf_apply",
+        "tf_validate"
+      ],
+      "entry": "community/terraform.py"
+    },
+    {
+      "name": "ansible",
+      "version": "1.0.0",
+      "category": "DevOps",
+      "description": "Ansible playbook execution and inventory automation",
+      "tools": [
+        "ansible_playbook",
+        "ansible_inventory"
+      ],
+      "entry": "community/ansible.py"
+    },
+    {
+      "name": "helm",
+      "version": "1.0.0",
+      "category": "DevOps",
+      "description": "Helm chart packaging and release management",
+      "tools": [
+        "helm_install",
+        "helm_upgrade",
+        "helm_rollback"
+      ],
+      "entry": "community/helm.py"
+    },
+    {
+      "name": "nginx",
+      "version": "1.0.0",
+      "category": "DevOps",
+      "description": "NGINX reverse proxy configuration and syntax checking",
+      "tools": [
+        "nginx_reload",
+        "nginx_test_config"
+      ],
+      "entry": "community/nginx.py"
+    },
+    {
+      "name": "aws",
+      "version": "1.0.0",
+      "category": "Cloud & DB",
+      "description": "AWS S3, EC2, and Lambda cloud utilities",
+      "tools": [
+        "aws_s3_upload",
+        "aws_lambda_invoke",
+        "aws_ec2_status"
+      ],
+      "entry": "community/aws.py"
+    },
+    {
+      "name": "gcp",
+      "version": "1.0.0",
+      "category": "Cloud & DB",
+      "description": "Google Cloud Platform Compute and Cloud Storage tools",
+      "tools": [
+        "gcp_gcs_upload",
+        "gcp_run_deploy"
+      ],
+      "entry": "community/gcp.py"
+    },
+    {
+      "name": "azure",
+      "version": "1.0.0",
+      "category": "Cloud & DB",
+      "description": "Microsoft Azure App Service and Blob Storage tools",
+      "tools": [
+        "azure_blob_upload",
+        "azure_app_deploy"
+      ],
+      "entry": "community/azure.py"
+    },
+    {
+      "name": "postgresql",
+      "version": "1.0.0",
+      "category": "Cloud & DB",
+      "description": "PostgreSQL database query, migration, and schema inspection",
+      "tools": [
+        "pg_query",
+        "pg_migrate",
+        "pg_schema"
+      ],
+      "entry": "community/postgresql.py"
+    },
+    {
+      "name": "redis",
+      "version": "1.0.0",
+      "category": "Cloud & DB",
+      "description": "Redis key-value caching, flush, and benchmark tools",
+      "tools": [
+        "redis_get",
+        "redis_set",
+        "redis_flush"
+      ],
+      "entry": "community/redis.py"
+    },
+    {
+      "name": "mongodb",
+      "version": "1.0.0",
+      "category": "Cloud & DB",
+      "description": "MongoDB document collection query and index optimization",
+      "tools": [
+        "mongo_find",
+        "mongo_insert",
+        "mongo_index"
+      ],
+      "entry": "community/mongodb.py"
+    },
+    {
+      "name": "github",
+      "version": "1.0.0",
+      "category": "Productivity",
+      "description": "GitHub PR creation, issue management, and workflow dispatch",
+      "tools": [
+        "gh_create_pr",
+        "gh_list_issues"
+      ],
+      "entry": "community/github.py"
+    },
+    {
+      "name": "slack",
+      "version": "1.0.0",
+      "category": "Productivity",
+      "description": "Slack channel messaging and deployment notification alerts",
+      "tools": [
+        "slack_send_message",
+        "slack_alert"
+      ],
+      "entry": "community/slack.py"
+    },
+    {
+      "name": "jira",
+      "version": "1.0.0",
+      "category": "Productivity",
+      "description": "Jira ticket creation, transition, and sprint tracking",
+      "tools": [
+        "jira_create_issue",
+        "jira_transition"
+      ],
+      "entry": "community/jira.py"
+    },
+    {
+      "name": "linear",
+      "version": "1.0.0",
+      "category": "Productivity",
+      "description": "Linear project issue creation and status synchronization",
+      "tools": [
+        "linear_create_issue",
+        "linear_sync"
+      ],
+      "entry": "community/linear.py"
+    },
+    {
+      "name": "notion",
+      "version": "1.0.0",
+      "category": "Productivity",
+      "description": "Notion database entry creation and documentation sync",
+      "tools": [
+        "notion_create_page",
+        "notion_sync_docs"
+      ],
+      "entry": "community/notion.py"
+    },
+    {
+      "name": "pytest_runner",
+      "version": "1.0.0",
+      "category": "Testing",
+      "description": "Pytest suite runner with coverage and XML report parser",
+      "tools": [
+        "run_pytest",
+        "parse_coverage"
+      ],
+      "entry": "community/pytest_runner.py"
+    },
+    {
+      "name": "jest_runner",
+      "version": "1.0.0",
+      "category": "Testing",
+      "description": "Jest JavaScript/TypeScript unit test runner",
+      "tools": [
+        "run_jest",
+        "jest_coverage"
+      ],
+      "entry": "community/jest_runner.py"
+    },
+    {
+      "name": "pylint",
+      "version": "1.0.0",
+      "category": "Testing",
+      "description": "Python static code analysis and linting diagnostics",
+      "tools": [
+        "run_pylint",
+        "pylint_check"
+      ],
+      "entry": "community/pylint.py"
+    },
+    {
+      "name": "eslint",
+      "version": "1.0.0",
+      "category": "Testing",
+      "description": "ESLint JavaScript/TypeScript code style enforcer",
+      "tools": [
+        "run_eslint",
+        "eslint_fix"
+      ],
+      "entry": "community/eslint.py"
+    },
+    {
+      "name": "sonarqube",
+      "version": "1.0.0",
+      "category": "Testing",
+      "description": "SonarQube code security and quality gate scanner",
+      "tools": [
+        "sonar_scan",
+        "sonar_quality_gate"
+      ],
+      "entry": "community/sonarqube.py"
+    },
+    {
+      "name": "snyk",
+      "version": "1.0.0",
+      "category": "Security",
+      "description": "Snyk dependency vulnerability scanner and patch advisor",
+      "tools": [
+        "snyk_test",
+        "snyk_monitor"
+      ],
+      "entry": "community/snyk.py"
+    },
+    {
+      "name": "trivy",
+      "version": "1.0.0",
+      "category": "Security",
+      "description": "Trivy container image and filesystem vulnerability audit",
+      "tools": [
+        "trivy_scan_image",
+        "trivy_scan_fs"
+      ],
+      "entry": "community/trivy.py"
+    },
+    {
+      "name": "bandit",
+      "version": "1.0.0",
+      "category": "Security",
+      "description": "Bandit Python security code scanner for common weaknesses",
+      "tools": [
+        "bandit_scan"
+      ],
+      "entry": "community/bandit.py"
+    },
+    {
+      "name": "owasp_zap",
+      "version": "1.0.0",
+      "category": "Security",
+      "description": "OWASP ZAP dynamic application security testing (DAST)",
+      "tools": [
+        "zap_baseline_scan",
+        "zap_spider"
+      ],
+      "entry": "community/owasp_zap.py"
+    },
+    {
+      "name": "graphql",
+      "version": "1.0.0",
+      "category": "API & Integration",
+      "description": "GraphQL schema validation and query generator",
+      "tools": [
+        "graphql_validate",
+        "graphql_introspect"
+      ],
+      "entry": "community/graphql.py"
+    },
+    {
+      "name": "openapi",
+      "version": "1.0.0",
+      "category": "API & Integration",
+      "description": "OpenAPI (Swagger) spec validator and mock server",
+      "tools": [
+        "openapi_validate",
+        "openapi_mock"
+      ],
+      "entry": "community/openapi.py"
+    },
+    {
+      "name": "postman",
+      "version": "1.0.0",
+      "category": "API & Integration",
+      "description": "Postman collection runner and API contract testing",
+      "tools": [
+        "postman_run_collection"
+      ],
+      "entry": "community/postman.py"
+    },
+    {
+      "name": "grpc",
+      "version": "1.0.0",
+      "category": "API & Integration",
+      "description": "gRPC proto linting and client call tester",
+      "tools": [
+        "grpc_call",
+        "grpc_proto_compile"
+      ],
+      "entry": "community/grpc.py"
+    },
+    {
+      "name": "kafka",
+      "version": "1.0.0",
+      "category": "API & Integration",
+      "description": "Apache Kafka topic inspector, producer, and consumer debug",
+      "tools": [
+        "kafka_produce",
+        "kafka_consume"
+      ],
+      "entry": "community/kafka.py"
+    },
+    {
+      "name": "rabbitmq",
+      "version": "1.0.0",
+      "category": "API & Integration",
+      "description": "RabbitMQ queue inspection and message publishing",
+      "tools": [
+        "rabbitmq_publish",
+        "rabbitmq_inspect_queue"
+      ],
+      "entry": "community/rabbitmq.py"
+    }
+  ]
+}

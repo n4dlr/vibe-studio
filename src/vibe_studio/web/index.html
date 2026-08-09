@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vibe Studio 4.0 — Cosmic Web Workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header Navbar -->
+    <header class="navbar">
+      <div class="brand">
+        <span class="logo-icon">🌌</span>
+        <span class="logo-text">Vibe Studio <span class="version">4.0 Cosmic</span></span>
+      </div>
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-tab="workspace">Workspace</button>
+        <button class="nav-tab" data-tab="marketplace">Marketplace (<span id="plugin-count">32</span>)</button>
+        <button class="nav-tab" data-tab="swarm">Swarm Network</button>
+        <button class="nav-tab" data-tab="memory">Global Memory</button>
+      </nav>
+      <div class="server-status">
+        <span class="status-dot online"></span>
+        <span id="status-text">Server Online</span>
+      </div>
+    </header>
+
+    <!-- Tab 1: Main Workspace -->
+    <main class="tab-content active" id="tab-workspace">
+      <div class="workspace-grid">
+        <!-- Sidebar: Predictive Actions & Shortcuts -->
+        <aside class="sidebar">
+          <div class="panel-header">
+            <h3>🔮 Predictive Coding</h3>
+          </div>
+          <div class="predictive-list" id="predictive-list">
+            <div class="predictive-item skeleton">Analyzing codebase context...</div>
+          </div>
+
+          <div class="panel-header" style="margin-top: 24px;">
+            <h3>📁 File Explorer</h3>
+          </div>
+          <div class="file-tree" id="file-tree">
+            <div class="tree-item file">loading workspace files...</div>
+          </div>
+        </aside>
+
+        <!-- Main Panel: Task Prompt & Agent Stream -->
+        <section class="main-panel">
+          <div class="task-box">
+            <div class="input-wrapper">
+              <input type="text" id="task-input" placeholder="Ask Vibe Studio agent to build, refactor, or test..." autocomplete="off">
+              <button id="run-task-btn" class="primary-btn">
+                <span>Run Agent</span> ⚡
+              </button>
+            </div>
+          </div>
+
+          <div class="log-panel">
+            <div class="panel-header">
+              <h3>⚡ Agent Thought & Tool Execution Stream</h3>
+              <button id="clear-log-btn" class="icon-btn">Clear</button>
+            </div>
+            <div class="log-stream" id="log-stream">
+              <div class="log-entry system">Vibe Studio 4.0 Cosmic initialized. Connected to WebSocket real-time event pipeline.</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Tab 2: Plugin Marketplace -->
+    <main class="tab-content" id="tab-marketplace">
+      <div class="marketplace-container">
+        <div class="marketplace-header">
+          <h2>🔌 In-Repo Plugin Marketplace</h2>
+          <div class="search-box">
+            <input type="text" id="marketplace-search" placeholder="Search 32+ enterprise & community plugins...">
+          </div>
+        </div>
+        <div class="plugin-grid" id="plugin-grid">
+          <!-- Plugin cards rendered dynamically -->
+        </div>
+      </div>
+    </main>
+
+    <!-- Tab 3: Swarm Network -->
+    <main class="tab-content" id="tab-swarm">
+      <div class="swarm-container">
+        <div class="swarm-header">
+          <h2>Distributed Agent Swarm</h2>
+          <p>Multi-node collaborative agent execution network.</p>
+        </div>
+        <div class="swarm-grid" id="swarm-workers">
+          <div class="worker-card active">
+            <div class="worker-header">
+              <span class="worker-title">Local Node (Coordinator)</span>
+              <span class="badge idle">IDLE</span>
+            </div>
+            <div class="worker-stats">
+              <div><strong>ID:</strong> master-node-1</div>
+              <div><strong>Host:</strong> 127.0.0.1:9000</div>
+              <div><strong>Active Tasks:</strong> 0</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Tab 4: Global Memory -->
+    <main class="tab-content" id="tab-memory">
+      <div class="memory-container">
+        <div class="memory-header">
+          <h2>💾 Global Memory & Pattern Cache</h2>
+        </div>
+        <div class="memory-list" id="memory-list">
+          <div class="memory-card">Loading project memory patterns...</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

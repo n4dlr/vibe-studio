@@ -84,6 +84,12 @@ class AgentOrchestrator:
                 self.progress_callback(stage, data)
             except Exception:
                 pass
+        try:
+            from vibe_studio.api.websocket_server import _ws_instance
+            if _ws_instance and _ws_instance.running:
+                _ws_instance.broadcast("agent_progress", {"stage": stage, "details": data})
+        except Exception:
+            pass
 
     def execute_task(self, prompt: str, active_file: str | None = None) -> OrchestratedExecutionResult:
         timings: list[PipelineStageTiming] = []

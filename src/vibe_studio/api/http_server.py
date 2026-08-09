@@ -1,13 +1,4 @@
-"""HTTP Server API — REST JSON interface for headless / remote agent invocation.
-
-Pillar 2 (API & CLI Mode):
-  Provides HTTP REST endpoints:
-    - GET  /health           : Health status & workspace root
-    - POST /api/v1/execute   : Execute an agent task (prompt, active_file)
-    - GET  /api/v1/context   : Query ranked ContextBundle for a prompt
-    - GET  /api/v1/graph     : Export CodeGraph summary (nodes, edges)
-    - GET  /api/v1/memory    : Query GlobalMemory stats & patterns
-"""
+"""HTTP Server API — REST JSON & Web UI interface for Vibe Studio 4.0 Cosmic."""
 from __future__ import annotations
 
 import json
@@ -15,22 +6,27 @@ import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
+import urllib.parse
 
 from vibe_studio.agents.orchestrator import AgentOrchestrator
+from vibe_studio.ai.predictive_engine import PredictiveCodingEngine
 from vibe_studio.context.context_engine import ContextEngine
 from vibe_studio.context.graph_rag import CodeGraph
 from vibe_studio.core.global_memory import GlobalMemory
+from vibe_studio.plugins.marketplace import PluginMarketplace
 
 logger = logging.getLogger(__name__)
 
 
 class VibeAPIRequestHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for Vibe Studio REST API."""
+    """HTTP request handler for Vibe Studio REST API & Web UI."""
 
     workspace_root: Path = Path.cwd()
     orchestrator: AgentOrchestrator | None = None
     context_engine: ContextEngine | None = None
     global_memory: GlobalMemory | None = None
+    predictive_engine: PredictiveCodingEngine | None = None
+    marketplace: PluginMarketplace | None = None
 
     def _set_headers(self, status: int = 200, content_type: str = "application/json") -> None:
         self.send_response(status)
@@ -54,13 +50,33 @@ class VibeAPIRequestHandler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self) -> None:
-        path = self.path.split("?")[0]
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        query_params = urllib.parse.parse_qs(parsed_url.query)
+
+        web_dir = Path(__file__).parent.parent / "web"
+
+        if path == "/" or path == "/index.html":
+            html_file = web_dir / "index.html"
+            if html_file.exists():
+                self._set_headers(200, "text/html; charset=utf-8")
+                self.wfile.write(html_file.read_bytes())
+                return
+
+        elif path.startswith("/static/"):
+            rel_file = path.replace("/static/", "")
+            target_file = web_dir / rel_file
+            if target_file.exists() and target_file.is_file():
+                content_type = "text/css" if path.endswith(".css") else ("application/javascript" if path.endswith(".js") else "text/plain")
+                self._set_headers(200, content_type)
+                self.wfile.write(target_file.read_bytes())
+                return
 
         if path == "/health":
             self._set_headers(200)
             res = {
                 "status": "ok",
-                "service": "Vibe Studio REST API 3.0",
+                "service": "Vibe Studio REST API 4.0 Cosmic",
                 "workspace": str(self.workspace_root),
             }
             self.wfile.write(json.dumps(res).encode("utf-8"))
@@ -80,17 +96,16 @@ class VibeAPIRequestHandler(BaseHTTPRequestHandler):
             }
             self.wfile.write(json.dumps(res).encode("utf-8"))
 
-        elif path == "/api/v1/context":
-            prompt = self.path.split("prompt=")[-1] if "prompt=" in self.path else "main"
-            ce = self.context_engine or ContextEngine(self.workspace_root, graph_expand=True)
-            bundle = ce.build(prompt=prompt)
+        elif path == "/api/v1/plugins":
+            mp = self.marketplace or PluginMarketplace(self.workspace_root)
             self._set_headers(200)
-            res = {
-                "total_tokens_est": bundle.total_tokens_est,
-                "items_count": len(bundle.items),
-                "items": [{"path": item.path, "score": item.score, "reason": item.reason} for item in bundle.items],
-            }
-            self.wfile.write(json.dumps(res).encode("utf-8"))
+            self.wfile.write(json.dumps({"plugins": mp.list_available()}).encode("utf-8"))
+
+        elif path == "/api/v1/plugins/search":
+            mp = self.marketplace or PluginMarketplace(self.workspace_root)
+            q = query_params.get("q", [""])[0]
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"plugins": mp.search(q)}).encode("utf-8"))
 
         else:
             self._set_headers(404)
@@ -122,6 +137,24 @@ class VibeAPIRequestHandler(BaseHTTPRequestHandler):
             }
             self.wfile.write(json.dumps(res).encode("utf-8"))
 
+        elif path == "/api/v1/predict":
+            body = self._read_json_body()
+            pe = self.predictive_engine or PredictiveCodingEngine(self.workspace_root)
+            suggestions = pe.predict_next_actions(
+                current_file=body.get("current_file"),
+                cursor_line=body.get("cursor_line", 1),
+                file_content=body.get("file_content", ""),
+            )
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"suggestions": suggestions}).encode("utf-8"))
+
+        elif path == "/api/v1/plugins/install":
+            body = self._read_json_body()
+            mp = self.marketplace or PluginMarketplace(self.workspace_root)
+            success = mp.install(body.get("name", ""))
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"success": success}).encode("utf-8"))
+
         else:
             self._set_headers(404)
             self.wfile.write(json.dumps({"error": "Endpoint not found"}).encode("utf-8"))
@@ -142,6 +175,8 @@ def create_api_server(
     handler.orchestrator = AgentOrchestrator(ws)
     handler.context_engine = ContextEngine(ws, graph_expand=True)
     handler.global_memory = GlobalMemory()
+    handler.predictive_engine = PredictiveCodingEngine(ws)
+    handler.marketplace = PluginMarketplace(ws)
 
     server = HTTPServer((host, port), handler)
     logger.info("Vibe Studio API server initialized on http://%s:%d", host, port)
