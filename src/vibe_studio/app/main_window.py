@@ -1231,11 +1231,44 @@ class SettingsDialog(QDialog):
         self.model_edit = QLineEdit(self.settings.default_model)
         self.model_edit.setPlaceholderText("e.g. qwen2.5-coder:7b or gpt-4o-mini")
 
+        # Context window spinbox
+        from PySide6.QtWidgets import QSpinBox, QDoubleSpinBox
+        self.num_ctx_spin = QSpinBox()
+        self.num_ctx_spin.setRange(2048, 131072)
+        self.num_ctx_spin.setSingleStep(2048)
+        self.num_ctx_spin.setSuffix(" tokens")
+        current_num_ctx = 32768
+        current_temp = 0.2
+        current_max_tokens = 4096
+        for p in self.settings.providers:
+            if p.kind == "ollama":
+                current_num_ctx = getattr(p, "num_ctx", 32768)
+                current_temp = getattr(p, "temperature", 0.2)
+                current_max_tokens = getattr(p, "max_tokens", 4096)
+        self.num_ctx_spin.setValue(current_num_ctx)
+
+        # Temperature spinbox (lower = faster & more deterministic)
+        self.temp_spin = QDoubleSpinBox()
+        self.temp_spin.setRange(0.0, 1.0)
+        self.temp_spin.setSingleStep(0.05)
+        self.temp_spin.setDecimals(2)
+        self.temp_spin.setValue(current_temp)
+
+        # Max Tokens spinbox
+        self.max_tokens_spin = QSpinBox()
+        self.max_tokens_spin.setRange(256, 32768)
+        self.max_tokens_spin.setSingleStep(512)
+        self.max_tokens_spin.setSuffix(" tokens")
+        self.max_tokens_spin.setValue(current_max_tokens)
+
         ai_form.addRow("Provider:", self.provider_combo)
         ai_form.addRow("Ollama URL:", self.ollama_url_edit)
         ai_form.addRow("API Base URL:", self.api_url_edit)
         ai_form.addRow("API Key:", self.api_key_edit)
         ai_form.addRow("Default Model:", self.model_edit)
+        ai_form.addRow("Context Window:", self.num_ctx_spin)
+        ai_form.addRow("Temperature:", self.temp_spin)
+        ai_form.addRow("Max Output Tokens:", self.max_tokens_spin)
 
         # Test connection button
         test_btn = QPushButton("Test Connection")
@@ -1343,12 +1376,17 @@ class SettingsDialog(QDialog):
         providers.append(ProviderConfig(
             name="ollama", kind="ollama",
             base_url=self.ollama_url_edit.text().strip() or "http://127.0.0.1:11434",
+            num_ctx=self.num_ctx_spin.value(),
+            temperature=self.temp_spin.value(),
+            max_tokens=self.max_tokens_spin.value(),
         ))
         api_key = self.api_key_edit.text().strip()
         providers.append(ProviderConfig(
             name="openai-compatible", kind="openai-compatible",
             base_url=self.api_url_edit.text().strip() or "https://api.openai.com/v1",
             api_key=api_key,
+            temperature=self.temp_spin.value(),
+            max_tokens=self.max_tokens_spin.value(),
         ))
         self.settings.providers = providers
         self.store.save(self.settings)

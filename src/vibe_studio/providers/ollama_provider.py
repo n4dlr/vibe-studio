@@ -15,9 +15,10 @@ from vibe_studio.providers.base import ModelInfo, ProviderError
 class OllamaProvider:
     name = "ollama"
 
-    def __init__(self, base_url: str = "http://127.0.0.1:11434", timeout: int = 120):
+    def __init__(self, base_url: str = "http://127.0.0.1:11434", timeout: int = 120, num_ctx: int = 32768):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self._num_ctx = num_ctx
         self._cancel_event = threading.Event()
         self.circuit_breaker = CircuitBreaker(name="ollama")
 
@@ -94,7 +95,7 @@ class OllamaProvider:
                 "options": {
                     "temperature": temperature,
                     "top_p": top_p,
-                    "num_ctx": kwargs.get("num_ctx", 8192),
+                    "num_ctx": kwargs.get("num_ctx", self._num_ctx),
                 },
             }
 
@@ -171,7 +172,7 @@ class OllamaProvider:
                 "stream": bool(stream and callback),
                 "options": {
                     "temperature": temperature,
-                    "num_ctx": kwargs.get("num_ctx", 8192),
+                    "num_ctx": kwargs.get("num_ctx", self._num_ctx),
                 },
             }
 

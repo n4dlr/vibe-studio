@@ -16,7 +16,8 @@ class ProviderConfig:
     api_key_env: str = ""
     timeout: int = 30
     temperature: float = 0.2
-    max_tokens: int = 1024
+    max_tokens: int = 4096
+    num_ctx: int = 32768
     streaming: bool = True
     enabled: bool = True
 
@@ -52,6 +53,7 @@ class AppSettings:
                     "timeout": p.timeout,
                     "temperature": p.temperature,
                     "max_tokens": p.max_tokens,
+                    "num_ctx": p.num_ctx,
                     "streaming": p.streaming,
                     "enabled": p.enabled,
                 }
@@ -79,7 +81,8 @@ class AppSettings:
                     api_key_env=str(p.get("api_key_env", "")),
                     timeout=int(p.get("timeout", 30)),
                     temperature=float(p.get("temperature", 0.2)),
-                    max_tokens=int(p.get("max_tokens", 1024)),
+                    max_tokens=int(p.get("max_tokens", 4096)),
+                    num_ctx=int(p.get("num_ctx", 32768)),
                     streaming=bool(p.get("streaming", True)),
                     enabled=bool(p.get("enabled", True)),
                 )

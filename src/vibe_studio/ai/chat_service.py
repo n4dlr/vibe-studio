@@ -72,9 +72,11 @@ class ChatService:
         s = self.model_manager.settings
         if s.local_only or s.default_provider == "ollama":
             url = "http://127.0.0.1:11434"
+            num_ctx = 32768
             for p in s.providers:
                 if p.kind == "ollama":
                     url = p.base_url
+                    num_ctx = getattr(p, "num_ctx", 32768)
             # Fast connection check — 2s timeout to avoid hanging tests
             import socket
             from urllib.parse import urlparse
@@ -84,7 +86,7 @@ class ChatService:
             try:
                 with socket.create_connection((host, port), timeout=2):
                     pass
-                provider = OllamaProvider(base_url=url, timeout=120)
+                provider = OllamaProvider(base_url=url, timeout=120, num_ctx=num_ctx)
                 if provider.test_connection():
                     return provider
             except (OSError, Exception):
