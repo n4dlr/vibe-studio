@@ -78,15 +78,17 @@ class AgentWorker(QObject):
         try:
             def _activity(event_type: str, data: dict):
                 self.activity.emit(event_type, data)
-                # Forward streaming chunks to the chat view
                 if event_type == "stream_chunk":
                     self.stream_chunk.emit(data.get("chunk", ""))
 
-            self.chat_service.add_activity_callback(_activity)
+            # Use set_activity_callback so this replaces any stale callback from
+            # a previous run — prevents old deleted workers from firing signals.
+            self.chat_service.set_activity_callback(_activity)
             response = self.chat_service.chat(self.prompt, autonomy_mode=self.mode)
             self.finished.emit(response)
         except Exception as exc:
             self.error.emit(str(exc))
+
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +245,7 @@ class MainWindow(QMainWindow):
         # Hide size/type/date columns — only show name
         for col in range(1, 4):
             self.explorer.hideColumn(col)
+        self.explorer.clicked.connect(self._open_selected_file_from_tree)
         self.explorer.doubleClicked.connect(self._open_selected_file_from_tree)
         self.explorer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.explorer.customContextMenuRequested.connect(self._explorer_context_menu)
@@ -343,9 +346,21 @@ class MainWindow(QMainWindow):
         self.undo_btn = QPushButton("↩  Undo")
         self.undo_btn.clicked.connect(self._undo_last_change)
 
+        self.clear_chat_btn = QPushButton("🗑️")
+        self.clear_chat_btn.setToolTip("Clear Chat History")
+        self.clear_chat_btn.setFixedSize(28, 26)
+        self.clear_chat_btn.clicked.connect(self._clear_chat_history)
+
+        self.export_chat_btn = QPushButton("📥")
+        self.export_chat_btn.setToolTip("Export Chat History to Markdown")
+        self.export_chat_btn.setFixedSize(28, 26)
+        self.export_chat_btn.clicked.connect(self._export_chat_history)
+
         btn_row.addWidget(self.send_btn, 2)
         btn_row.addWidget(self.stop_btn)
         btn_row.addWidget(self.undo_btn)
+        btn_row.addWidget(self.clear_chat_btn)
+        btn_row.addWidget(self.export_chat_btn)
         rl.addLayout(btn_row)
         self._h_splitter.addWidget(self._right_widget)
 
@@ -473,18 +488,27 @@ class MainWindow(QMainWindow):
         text = self.chat_input.toPlainText().strip()
         if not text:
             return
-        # Include selected editor text as context
+        # Include selected editor text or active file as context
         curr_editor = self.editor_tabs.currentWidget()
-        if isinstance(curr_editor, EditorWidget):
+        if isinstance(curr_editor, EditorWidget) and getattr(curr_editor, "path", None):
+            file_name = Path(curr_editor.path).name
             sel = curr_editor.textCursor().selectedText()
             if sel.strip():
-                text = f"{text}\n\n[Selected code in {Path(curr_editor.path).name}]:\n```\n{sel}\n```"
+                text = f"{text}\n\n[Selected code in {file_name}]:\n```\n{sel}\n```"
+            else:
+                text = f"{text}\n\n[Active file: {file_name}]"
         self._run_ai_prompt(text)
 
     def _run_ai_prompt(self, prompt: str) -> None:
-        if self._agent_thread and self._agent_thread.isRunning():
-            self.chat.append("<b style='color:#f59e0b;'>⚠ Agent already running. Press Stop first.</b>\n")
-            return
+        # Guard: check if previous thread is still alive (with safety for already-deleted C++ objects)
+        try:
+            if self._agent_thread and self._agent_thread.isRunning():
+                self.chat.append("<b style='color:#f59e0b;'>⚠ Agent already running. Press Stop first.</b>\n")
+                return
+        except RuntimeError:
+            # C++ QThread object already deleted — safe to proceed
+            self._agent_thread = None
+            self._agent_worker = None
 
         self.chat.append(f"<b style='color:#60a5fa;'>You:</b> {prompt[:200]}{'…' if len(prompt) > 200 else ''}\n")
         self.chat_input.clear()
@@ -507,6 +531,11 @@ class MainWindow(QMainWindow):
         thread = QThread(self)
         worker.moveToThread(thread)
 
+        def _clear_refs() -> None:
+            """Clear Python references after the C++ QThread is deleted."""
+            self._agent_thread = None
+            self._agent_worker = None
+
         thread.started.connect(worker.process)
         worker.activity.connect(self._on_agent_activity)
         worker.stream_chunk.connect(self._on_stream_chunk)
@@ -517,23 +546,107 @@ class MainWindow(QMainWindow):
         worker.finished.connect(worker.deleteLater)
         worker.error.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(_clear_refs)   # ← clears refs AFTER deleteLater
 
         thread.start()
         self._agent_thread = thread
         self._agent_worker = worker
 
+
     @Slot(str, dict)
     def _on_agent_activity(self, event_type: str, data: dict) -> None:
         self.activity_panel.add_activity_event(event_type, data)
-        # Mirror important events to status bar
+
+        # ── Rich status bar feedback ──────────────────────────────────────────
         if event_type == "state_changed":
-            self._status_state_label.setText(f"Agent: {data.get('state', '')}")
+            state = data.get("state", "")
+            _icons = {
+                "ANALYZING":        "🔍 Analyzing…",
+                "PLANNING":         "📋 Planning steps…",
+                "EXECUTING":        "⚡ Executing…",
+                "OBSERVING":        "👁 Observing result…",
+                "REVIEWING":        "📝 Reviewing output…",
+                "FIXING":           "🔧 Self-correcting…",
+                "VALIDATING":       "✅ Validating…",
+                "COMPLETED":        "✅ Completed",
+                "FAILED":           "❌ Failed",
+                "CANCELLED":        "⛔ Cancelled",
+                "WAITING_APPROVAL": "⏸ Waiting for your approval…",
+            }
+            label = _icons.get(state, f"Agent: {state}")
+            self._status_state_label.setText(label)
+            self._set_status(label)
+
+        elif event_type == "analyzing":
+            task_snip = data.get("task", "")[:60]
+            self._set_status(f"🔍 Analyzing: {task_snip}")
+
+        elif event_type == "project_detected":
+            fw = ", ".join(data.get("frameworks", [])) or "—"
+            langs = ", ".join(data.get("languages", [])) or "—"
+            self._set_status(f"✓ Project detected — frameworks: {fw} | languages: {langs}")
+
+        elif event_type == "plan_created":
+            steps = data.get("plan", [])
+            if steps:
+                self._set_status(f"📋 Plan ready — {len(steps)} step(s): {steps[0][:50]}…")
+            # Ask for permission if in Ask Mode or Plan Mode
+            if hasattr(self, "mode_combo") and self.mode_combo.currentText() in ("Ask Mode", "Plan Mode"):
+                from PySide6.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    self,
+                    "Agent Plan Approval Required",
+                    f"Agent proposed execution plan ({len(steps)} steps):\n\n"
+                    + "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps[:5]))
+                    + "\n\nProceed with these changes?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply == QMessageBox.No:
+                    self._stop_agent()
+
         elif event_type == "tool_starting":
-            self._set_status(f"🔧 Running tool: {data.get('tool', '')}")
+            tool = data.get("tool", "")
+            args = data.get("args", {})
+            hint = args.get("path") or args.get("command") or args.get("query") or args.get("pattern") or ""
+            hint = str(hint)[:50]
+            label = f"⚡ {tool}({hint})" if hint else f"⚡ {tool}(…)"
+            self._set_status(label)
+
         elif event_type == "tool_finished":
             tool = data.get("tool", "")
-            code = data.get("observation", {}).get("exit_code", 0)
-            self._set_status(f"✓ {tool} completed (exit {code})")
+            obs  = data.get("observation") or {}
+            code = obs.get("exit_code", 0)
+            dur  = data.get("duration", 0)
+            icon = "✓" if code == 0 else "✗"
+            self._set_status(f"{icon} {tool} done ({dur:.2f}s)")
+            if obs.get("files_changed"):
+                self._reload_open_editors(obs["files_changed"])
+
+        elif event_type == "stuck_detected":
+            tool = data.get("tool", "")
+            self._set_status(f"⚠ Stuck detected on '{tool}' — switching approach…")
+
+        elif event_type == "loop_detected":
+            self._set_status(f"🔁 Loop detected — retrying differently…")
+
+        elif event_type == "self_correcting":
+            cyc = data.get("cycle", "?")
+            mx  = data.get("max", "?")
+            cat = data.get("category", "error")
+            self._set_status(f"🔧 Self-repair {cyc}/{mx}: fixing {cat}…")
+
+        elif event_type == "completed":
+            files = data.get("files_changed", [])
+            label = f"✅ Done — {len(files)} file(s) changed" if files else "✅ Done"
+            self._set_status(label)
+            if files:
+                self._reload_open_editors(files)
+
+        elif event_type == "provider_error":
+            self._set_status(f"⚠ Provider error — using offline fallback")
+        # ─────────────────────────────────────────────────────────────────────
+
 
     @Slot(str)
     def _on_stream_chunk(self, chunk: str) -> None:
@@ -547,19 +660,57 @@ class MainWindow(QMainWindow):
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
 
+    def _reload_open_editors(self, files: list[str] | set[str] | str) -> None:
+        """Reload any open editor tab matching changed files on disk."""
+        if isinstance(files, str):
+            files = [files]
+        for f in files:
+            if not f:
+                continue
+            target_name = Path(f).name
+            target_path = Path(f).resolve() if Path(f).is_absolute() else None
+            for idx in range(self.editor_tabs.count()):
+                w = self.editor_tabs.widget(idx)
+                if isinstance(w, EditorWidget) and getattr(w, "path", None):
+                    w_path = Path(w.path).resolve()
+                    if w_path.name == target_name or (target_path and w_path == target_path):
+                        w.is_dirty = False
+                        w.reload_from_disk()
+
     def _handle_agent_response(self, response: str) -> None:
+        # Build detailed diff & file stats summary if files were changed
+        diff_stats = ""
+        if hasattr(self, "chat_service") and self.chat_service._agent:
+            agent = self.chat_service._agent
+            history = agent.tool_registry.patch_tools.history
+            if history:
+                diff_stats = "\n\n<b>📝 Dəyişikliklər Xülasəsi:</b><ul>"
+                modified_paths = []
+                for snap in history:
+                    file_name = Path(snap.path).name
+                    modified_paths.append(snap.path)
+                    lines_added = len([l for l in snap.diff.splitlines() if l.startswith("+") and not l.startswith("+++")])
+                    lines_removed = len([l for l in snap.diff.splitlines() if l.startswith("-") and not l.startswith("---")])
+                    file_size = Path(snap.path).stat().st_size if Path(snap.path).exists() else 0
+                    diff_stats += f"<li>📄 <b>{file_name}</b>: +{lines_added} / -{lines_removed} sətir ({file_size} bayt)</li>"
+                diff_stats += "</ul>"
+                self._reload_open_editors(modified_paths)
+
+        full_response = response + diff_stats
+
         if not self._streaming_response:
-            self.chat.append(f"<b style='color:#4ade80;'>AI:</b> {response}\n")
+            self.chat.append(f"<b style='color:#4ade80;'>AI:</b> {full_response}\n")
         else:
+            if diff_stats:
+                self.chat.append(diff_stats)
             self.chat.append("\n")
             self._streaming_response = False
         self.send_btn.setEnabled(True)
         self.send_btn.setText("▶  Send Task")
         self._status_state_label.setText("Agent: Idle")
         self._set_status("Agent task completed.")
-        # Refresh file tree and git panel after agent work
+        # Refresh file tree, git panel, and changes tab after agent work
         self.refresh_git_status()
-        # Update changes panel with latest AI diffs
         self._refresh_changes_panel()
 
     def _handle_agent_error(self, error: str) -> None:
@@ -766,6 +917,47 @@ class MainWindow(QMainWindow):
         # Update LSP status on status bar
         status_msg = self._code_intelligence.get_status("python")
         self._set_status(f"Opened project: {folder} | {status_msg}")
+        # Load persistent chat history for project
+        self._load_saved_chat_history()
+
+    def _load_saved_chat_history(self) -> None:
+        """Load and display saved chat history for the project."""
+        history = self.chat_service.load_history(self.settings.project_path)
+        self.chat.clear()
+        if not history:
+            return
+        for msg in history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "user":
+                self.chat.append(f"<b style='color:#60a5fa;'>You:</b> {content}\n")
+            else:
+                self.chat.append(f"<b style='color:#4ade80;'>AI:</b> {content}\n")
+        self._set_status(f"Loaded {len(history)} messages from chat history.")
+
+    def _clear_chat_history(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self,
+            "Clear Chat History",
+            "Are you sure you want to clear all conversation history for this project?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.chat_service.clear_history(self.settings.project_path)
+            self.chat.clear()
+            self.chat.append("<b style='color:#94a3b8;'>System: Chat history cleared.</b>\n")
+            self._set_status("Chat history cleared.")
+
+    def _export_chat_history(self) -> None:
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Chat History", "chat_history.md", "Markdown Files (*.md);;All Files (*)"
+        )
+        if file_path:
+            self.chat_service.export_history_markdown(file_path)
+            self._set_status(f"Exported chat history to {file_path}")
+            self.chat.append(f"<b style='color:#38bdf8;'>System:</b> Exported chat history to {file_path}\n")
 
     def open_file(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(self, "Open File")
@@ -1115,6 +1307,26 @@ class SettingsDialog(QDialog):
         except Exception as e:
             self.conn_result.setText(f"✗ Error: {e}")
 
+    def _reload_open_editors(self, files: list[str] | set[str] | str) -> None:
+        """Reload or close open editor tabs matching changed/deleted files on disk."""
+        if isinstance(files, str):
+            files = [files]
+        for f in files:
+            if not f:
+                continue
+            target_name = Path(f).name
+            target_path = Path(f).resolve() if Path(f).is_absolute() else None
+            for idx in reversed(range(self.editor_tabs.count())):
+                w = self.editor_tabs.widget(idx)
+                if isinstance(w, EditorWidget) and getattr(w, "path", None):
+                    w_path = Path(w.path).resolve()
+                    if w_path.name == target_name or (target_path and w_path == target_path):
+                        if not w_path.exists():
+                            self.editor_tabs.removeTab(idx)
+                            w.deleteLater()
+                        else:
+                            w.reload_from_disk(force=True)
+
     def _save(self) -> None:
         provider_kind = self.provider_combo.currentText()
         self.settings.default_provider = provider_kind
@@ -1144,11 +1356,11 @@ class SettingsDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# Changes panel — shows AI-applied diffs with accept/undo per file
+# Changes panel — shows AI-applied diffs with per-file selection and revert
 # ---------------------------------------------------------------------------
 
 class _ChangesPanel(QWidget):
-    """Shows the diff for each file changed by the most recent agent task."""
+    """Shows AI-applied diffs with per-file selection and individual revert functionality."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1156,16 +1368,29 @@ class _ChangesPanel(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        top_row = QHBoxLayout()
+        # Header row
         self.header = QLabel("No changes yet.")
         self.header.setStyleSheet("color:#94a3b8;font-weight:bold;")
-        top_row.addWidget(self.header)
-        top_row.addStretch()
-        self.undo_all_btn = QPushButton("↩ Undo All")
+        layout.addWidget(self.header)
+
+        # Selector & buttons row
+        ctrl_row = QHBoxLayout()
+        self.file_combo = QComboBox()
+        self.file_combo.setMinimumWidth(180)
+        self.file_combo.currentIndexChanged.connect(self._on_file_selected)
+        ctrl_row.addWidget(self.file_combo, 1)
+
+        self.revert_selected_btn = QPushButton("↩ Revert Selected File")
+        self.revert_selected_btn.setFixedHeight(26)
+        self.revert_selected_btn.clicked.connect(self._revert_selected)
+        ctrl_row.addWidget(self.revert_selected_btn)
+
+        self.undo_all_btn = QPushButton("↩ Revert All")
         self.undo_all_btn.setFixedHeight(26)
         self.undo_all_btn.clicked.connect(self._undo_all)
-        top_row.addWidget(self.undo_all_btn)
-        layout.addLayout(top_row)
+        ctrl_row.addWidget(self.undo_all_btn)
+
+        layout.addLayout(ctrl_row)
 
         self.diff_view = QTextEdit()
         self.diff_view.setReadOnly(True)
@@ -1179,50 +1404,86 @@ class _ChangesPanel(QWidget):
 
     def set_snapshots(self, snapshots: list) -> None:
         self._snapshots = list(snapshots)
+        self.file_combo.blockSignals(True)
+        self.file_combo.clear()
+
         if not self._snapshots:
             self.header.setText("No AI changes in this session.")
             self.diff_view.clear()
+            self.file_combo.addItem("No changed files")
+            self.file_combo.setEnabled(False)
+            self.revert_selected_btn.setEnabled(False)
+            self.undo_all_btn.setEnabled(False)
+            self.file_combo.blockSignals(False)
             return
 
-        self.header.setText(f"{len(self._snapshots)} file change(s) by AI:")
-        html_parts: list[str] = []
-        for snap in self._snapshots:
-            diff = snap.diff or ""
-            if not diff:
-                continue
-            file_header = f"<b style='color:#38bdf8;'>─── {snap.path} ───</b><br>"
-            diff_html = _diff_to_html(diff)
-            html_parts.append(file_header + diff_html)
+        self.file_combo.setEnabled(True)
+        self.revert_selected_btn.setEnabled(True)
+        self.undo_all_btn.setEnabled(True)
 
+        for snap in self._snapshots:
+            file_name = Path(snap.path).name
+            diff_lines = snap.diff.splitlines() if snap.diff else []
+            added = len([l for l in diff_lines if l.startswith("+") and not l.startswith("+++")])
+            removed = len([l for l in diff_lines if l.startswith("-") and not l.startswith("---")])
+            self.file_combo.addItem(f"📄 {file_name} (+{added}/-{removed})", snap.path)
+
+        self.file_combo.blockSignals(False)
+        self.header.setText(f"{len(self._snapshots)} file change(s) by AI:")
+        self._on_file_selected(0)
+
+    def _on_file_selected(self, index: int) -> None:
+        if index < 0 or index >= len(self._snapshots):
+            self.diff_view.clear()
+            return
+
+        snap = self._snapshots[index]
+        diff = snap.diff or ""
+        file_header = f"<b style='color:#38bdf8;'>─── {snap.path} ───</b><br>"
+        diff_html = _diff_to_html(diff)
         self.diff_view.setHtml(
             "<pre style='font-family:monospace;font-size:10px;'>"
-            + "".join(html_parts)
+            + file_header + diff_html
             + "</pre>"
         )
 
-    def closeEvent(self, event) -> None:
-        self._stop_agent()
-        if self._agent_thread and self._agent_thread.isRunning():
-            self._agent_thread.quit()
-            self._agent_thread.wait(500)
-        super().closeEvent(event)
+    def _revert_selected(self) -> None:
+        selected_path = self.file_combo.currentData()
+        if not selected_path:
+            return
+        main_win = self.window()
+        if not hasattr(main_win, "chat_service") or not main_win.chat_service._agent:
+            return
+        pt = main_win.chat_service._agent.tool_registry.patch_tools
+        ok = pt.revert_file_change(selected_path)
+        if ok:
+            if hasattr(main_win, "_reload_open_editors"):
+                main_win._reload_open_editors(selected_path)
+            file_name = Path(selected_path).name
+            main_win._set_status(f"Reverted AI changes in {file_name}")
+            self.set_snapshots(pt.history)
+            if hasattr(main_win, "refresh_git_status"):
+                main_win.refresh_git_status()
 
     def _undo_all(self) -> None:
         main_win = self.window()
-        if not hasattr(main_win, "chat_service"):
+        if not hasattr(main_win, "chat_service") or not main_win.chat_service._agent:
             return
-        cs = main_win.chat_service
-        if not cs._agent:
-            return
-        pt = cs._agent.tool_registry.patch_tools
+        pt = main_win.chat_service._agent.tool_registry.patch_tools
         count = 0
+        changed_paths = [s.path for s in pt.history]
         while pt.history:
             pt.undo_last_change()
             count += 1
+        if hasattr(main_win, "_reload_open_editors"):
+            main_win._reload_open_editors(changed_paths)
         self.header.setText(f"Reverted {count} change(s).")
         self.diff_view.clear()
-        self._snapshots = []
-        main_win._set_status(f"Reverted {count} AI file change(s).")
+        self.set_snapshots([])
+        if hasattr(main_win, "_set_status"):
+            main_win._set_status(f"Reverted {count} AI file change(s).")
+        if hasattr(main_win, "refresh_git_status"):
+            main_win.refresh_git_status()
 
 
 def _diff_to_html(diff: str) -> str:

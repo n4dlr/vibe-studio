@@ -255,13 +255,15 @@ class EditorWidget(QPlainTextEdit):
         file_path = Path(self.path)
         if file_path.exists():
             text = file_path.read_text(encoding="utf-8", errors="replace")
+            self.blockSignals(True)
             self.setPlainText(text)
+            self.blockSignals(False)
             self.is_dirty = False
             self.document_version = 1
 
-    def reload_from_disk(self) -> None:
-        """Reload content from disk if the file has NOT been modified by the user."""
-        if not self.is_dirty:
+    def reload_from_disk(self, force: bool = False) -> None:
+        """Reload content from disk if unmodified by user or force=True."""
+        if force or not self.is_dirty:
             self._load_file()
 
     def _on_text_changed(self) -> None:

@@ -88,6 +88,18 @@ def test_xml_and_bare_json_parsing():
     assert calls_bare[0].tool == "search_text"
 
 
+def test_tool_call_wrapper_parsing():
+    wrapper_text = '```json\n{"tool_call": {"name": "execute_command", "parameters": {"command": "echo hello", "cwd": ".", "timeout": 60}}}\n```'
+    calls = parse_tool_calls(wrapper_text)
+    assert len(calls) == 1
+    assert calls[0].tool == "execute_command"
+    assert calls[0].args.get("command") == "echo hello"
+
+    stripped = strip_tool_calls(wrapper_text, calls)
+    assert "tool_call" not in stripped
+    assert "execute_command" not in stripped
+
+
 # ── Bug E: Invalid JSON recovery without infinite loop ────────────────────────
 
 def test_bug_e_invalid_json_handling(tmp_path):

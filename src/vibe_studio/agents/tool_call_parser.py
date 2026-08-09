@@ -102,33 +102,85 @@ def _balance_braces(s: str) -> str:
     return s + "".join(reversed(stack))
 
 
+# Inline tool call prefix: tool_name{"args": ...} or tool_name({"path": ...})
+_INLINE_TOOL_PREFIX = re.compile(
+    r'(\b([a-zA-Z0-9_]+)\s*(\{\s*"(?:args|arguments|parameters|path|filename|file|content)"[\s\S]*?\}))',
+    re.DOTALL,
+)
+
+
 def _extract_tool_and_args(
     data: dict[str, Any]
 ) -> tuple[str | None, dict[str, Any]]:
     """Normalise various JSON schemas to (tool_name, args)."""
+    tool_name: str | None = None
+    args: dict[str, Any] = {}
+
     # Schema 1: {"tool": "name", "args": {...}}
     if "tool" in data and isinstance(data["tool"], str):
-        args = data.get("args") or data.get("arguments") or data.get("parameters") or {}
-        if isinstance(args, str):
-            args = _try_parse_json(args) or {}
-        return data["tool"], args
+        tool_name = data["tool"]
+        raw_args = data.get("args") or data.get("arguments") or data.get("parameters") or {}
+        if isinstance(raw_args, str):
+            raw_args = _try_parse_json(raw_args) or {}
+        args = raw_args if isinstance(raw_args, dict) else {}
 
-    # Schema 2: OpenAI function-calling {"name": "...", "arguments": {...}}
-    if "name" in data and "arguments" in data:
-        args = data["arguments"]
-        if isinstance(args, str):
-            args = _try_parse_json(args) or {}
-        return data["name"], args if isinstance(args, dict) else {}
+    # Schema 2: {"tool_call": {"name": "...", "parameters"|"args"|"arguments": {...}}}
+    elif "tool_call" in data or "tool_calls" in data:
+        tc = data.get("tool_call") or data.get("tool_calls")
+        if isinstance(tc, list) and tc:
+            tc = tc[0]
+        if isinstance(tc, dict):
+            name = tc.get("name") or tc.get("tool") or tc.get("function")
+            raw_args = tc.get("parameters") or tc.get("args") or tc.get("arguments") or tc.get("parameters_input") or {}
+            if isinstance(name, str):
+                if isinstance(raw_args, str):
+                    raw_args = _try_parse_json(raw_args) or {}
+                tool_name = name
+                args = raw_args if isinstance(raw_args, dict) else {}
 
-    # Schema 3: {"function": {"name": "...", "arguments": {...}}}
-    fn = data.get("function")
-    if isinstance(fn, dict) and "name" in fn:
-        args = fn.get("arguments", {})
-        if isinstance(args, str):
-            args = _try_parse_json(args) or {}
-        return fn["name"], args if isinstance(args, dict) else {}
+    # Schema 3: OpenAI function-calling {"name": "...", "arguments"|"parameters": {...}}
+    elif "name" in data and ("arguments" in data or "parameters" in data):
+        tool_name = data["name"]
+        raw_args = data.get("arguments") or data.get("parameters") or {}
+        if isinstance(raw_args, str):
+            raw_args = _try_parse_json(raw_args) or {}
+        args = raw_args if isinstance(raw_args, dict) else {}
 
-    return None, {}
+    # Schema 4: {"function": {"name": "...", "arguments": {...}}}
+    elif "function" in data and isinstance(data["function"], dict) and "name" in data["function"]:
+        fn = data["function"]
+        tool_name = fn["name"]
+        raw_args = fn.get("arguments") or fn.get("parameters") or {}
+        if isinstance(raw_args, str):
+            raw_args = _try_parse_json(raw_args) or {}
+        args = raw_args if isinstance(raw_args, dict) else {}
+
+    # Schema 5: LangChain format {"action": "...", "action_input": {...}}
+    elif "action" in data and isinstance(data["action"], str):
+        tool_name = data["action"]
+        raw_args = data.get("action_input") or data.get("args") or {}
+        if isinstance(raw_args, str):
+            raw_args = _try_parse_json(raw_args) or {}
+        args = raw_args if isinstance(raw_args, dict) else {}
+
+    # Flatten nested "args" if present (e.g. {"args": {"filename": "hello.html"}})
+    if isinstance(args, dict) and "args" in args and isinstance(args["args"], dict):
+        args = args["args"]
+
+    # Parameter normalization for common tool arguments
+    if tool_name:
+        # Normalize file path parameter names for filesystem tools
+        _file_tools = {
+            "delete_file", "read_file", "write_file", "create_file",
+            "patch_file", "file_exists", "get_file_metadata",
+        }
+        if tool_name in _file_tools and "path" not in args:
+            for alt in ("filename", "file", "target", "filepath", "path_name"):
+                if alt in args:
+                    args["path"] = args.pop(alt)
+                    break
+
+    return tool_name, args
 
 
 def parse_tool_calls(text: str) -> list[ParsedToolCall]:
@@ -174,7 +226,7 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
             _add(ParsedToolCall(tool=tool_name, args=args, raw=m.group(0), source="xml"),
                  m.start(), m.end())
 
-    # 3. Bare JSON with "tool" key
+    # 3. Bare JSON with "tool" or "tool_call" key
     for m in _BARE_JSON_TOOL.finditer(text):
         if _overlaps(m.start(), m.end()):
             continue
@@ -196,16 +248,43 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
                 _add(ParsedToolCall(tool=name, args=args, raw=m.group(0), source="openai_fn"),
                      m.start(), m.end())
 
+    # 5. Inline tool call prefix: tool_name{"args": ...} or tool_name({"filename": ...})
+    for m in _INLINE_TOOL_PREFIX.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        tool_name = m.group(2).strip()
+        json_obj = _try_parse_json(m.group(3))
+        if json_obj and isinstance(json_obj, dict):
+            name, args = _extract_tool_and_args({"tool": tool_name, "args": json_obj})
+            if name:
+                _add(ParsedToolCall(tool=name, args=args, raw=m.group(0), source="inline_prefix"),
+                     m.start(), m.end())
+
     # Sort by position in text (preserves model's intended order)
     calls.sort(key=lambda c: text.find(c.raw))
     return calls
 
 
 def strip_tool_calls(text: str, calls: list[ParsedToolCall]) -> str:
-    """Remove all tool call blocks from text, leaving only prose."""
+    """Remove all tool call blocks and raw tool-call JSON from text, leaving only prose."""
     result = text
     for call in calls:
         result = result.replace(call.raw, "")
+
+    # Extra safety sweep: strip any remaining fenced ```json ... ``` blocks containing tool calls
+    result = re.sub(
+        r"```(?:json|tool_call|tool)?\s*\{\s*\"(?:tool|tool_call|name|action)\"[\s\S]*?\}\s*```",
+        "",
+        result,
+        flags=re.IGNORECASE,
+    )
+    # Extra safety sweep: strip bare tool_call objects
+    result = re.sub(
+        r"\{\s*\"(?:tool|tool_call)\"\s*:\s*\{[\s\S]*?\}\s*\}",
+        "",
+        result,
+        flags=re.IGNORECASE,
+    )
     return result.strip()
 
 

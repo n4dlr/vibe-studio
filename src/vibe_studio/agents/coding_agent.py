@@ -105,6 +105,7 @@ class AgentPlan:
     steps: list[str] = field(default_factory=list)
     approval_required: bool = False
     approved: bool = False
+    intent: str = "task"  # "task" | "greeting" | "chat"
 
 
 @dataclass
@@ -237,28 +238,48 @@ class AutonomousAgent:
         except Exception:
             fw_str = "unknown"
 
-        steps: list[str] = [
-            f"Understand project structure (detected: {fw_str})",
-            "Search for relevant files and symbols",
-        ]
-        t = task.lower()
-        if any(w in t for w in ["background", "arxa fon", "gradient", "color", "css", "style", "dark", "theme"]):
-            steps += ["Locate styling file", "Read current styles", "Apply gradient/background change", "Validate changes"]
-        elif any(w in t for w in ["test", "pytest", "npm test", "failing", "düzəlt"]):
-            steps += ["Run test suite", "Identify failing tests", "Read failing code", "Patch source", "Re-run tests"]
-        elif any(w in t for w in ["create", "yarat", "yaz", "new file", "add file"]):
-            steps += ["Determine target path", "Create file with content", "Validate syntax"]
-        elif any(w in t for w in ["delete", "sil", "remove", "kaldır"]):
-            steps += ["Find file references", "Warn if referenced", "Delete file safely"]
-        elif any(w in t for w in ["refactor", "rename", "move", "reorganize"]):
-            steps += ["Identify all references", "Apply changes across files", "Verify project still builds"]
-        elif any(w in t for w in ["bug", "fix", "error", "crash", "exception"]):
-            steps += ["Locate bug in code", "Read surrounding context", "Apply fix", "Run tests"]
-        elif any(w in t for w in ["analyze", "explain", "summarize", "understand"]):
-            steps += ["Scan project structure", "Read key files", "Produce analysis"]
+        steps: list[str] = []
+        t = task.lower().strip()
+
+        # Check for conversational greeting / simple chat (short prompt without code keywords)
+        words = t.split()
+        is_greeting = (
+            len(t) < 40
+            and not any(k in t for k in ["create", "yarat", "yaz", "file", "fayl", "make", "code", "run", "delete", "sil"])
+            and any(w in words for w in ["salam", "hello", "hi", "hey", "sa", "necəsn", "necesen", "günaydın", "gunaydin"])
+        )
+
+        if is_greeting:
+            steps = ["İstifadəçi salamlaşmasının təhlili", "Cavabın hazırlanması"]
+            plan = AgentPlan(
+                task=task, steps=steps, intent="greeting",
+                approval_required=False,
+            )
+            self._set_state(AgentState.PLANNING)
+            self._emit("plan_created", {"plan": steps})
+            return plan
         else:
-            steps += ["Inspect relevant files", "Apply required changes", "Validate"]
-        steps.append("Report what changed")
+            steps = [
+                f"Understand project structure (detected: {fw_str})",
+                "Search for relevant files and symbols",
+            ]
+            if any(w in t for w in ["background", "arxa fon", "gradient", "color", "css", "style", "dark", "theme"]):
+                steps += ["Locate styling file", "Read current styles", "Apply gradient/background change", "Validate changes"]
+            elif any(w in t for w in ["test", "pytest", "npm test", "failing", "düzəlt"]):
+                steps += ["Run test suite", "Identify failing tests", "Read failing code", "Patch source", "Re-run tests"]
+            elif any(w in t for w in ["create", "yarat", "yaz", "new file", "add file"]):
+                steps += ["Determine target path", "Create file with content", "Validate syntax"]
+            elif any(w in t for w in ["delete", "sil", "remove", "kaldır"]):
+                steps += ["Find file references", "Warn if referenced", "Delete file safely"]
+            elif any(w in t for w in ["refactor", "rename", "move", "reorganize"]):
+                steps += ["Identify all references", "Apply changes across files", "Verify project still builds"]
+            elif any(w in t for w in ["bug", "fix", "error", "crash", "exception"]):
+                steps += ["Locate bug in code", "Read surrounding context", "Apply fix", "Run tests"]
+            elif any(w in t for w in ["analyze", "explain", "summarize", "understand"]):
+                steps += ["Scan project structure", "Read key files", "Produce analysis"]
+            else:
+                steps += ["Inspect relevant files", "Apply required changes", "Validate"]
+            steps.append("Report what changed")
 
         plan = AgentPlan(
             task=task,
@@ -289,6 +310,20 @@ class AutonomousAgent:
         if self._cancel_requested:
             return AgentTaskResult(status=AgentState.CANCELLED, task=task, summary="Cancelled.")
 
+        # ── Greeting fast-path ── immediately return without touching LLM or tools
+        if plan.intent == "greeting":
+            greeting_response = (
+                "Salam! Mən Vibe Studio AI köməkçisiyəm. "
+                "Layihənizdə sizə necə kömək edə bilərəm?\n"
+                "Məsələn: fayl yaratmaq, kodu düzəltmək, testləri işə salmaq, refaktor etmək və s."
+            )
+            self._set_state(AgentState.COMPLETED)
+            self._emit("completed", {"summary": greeting_response, "files_changed": []})
+            return AgentTaskResult(
+                status=AgentState.COMPLETED, task=task,
+                summary=greeting_response, execution_id=self.execution_id,
+            )
+
         if self.autonomy_mode == AutonomyMode.PLAN and not plan.approved:
             self._set_state(AgentState.WAITING_APPROVAL)
             return AgentTaskResult(
@@ -311,12 +346,21 @@ class AutonomousAgent:
         raw_budget = 16000
         token_budget = adapt_context_to_model(raw_budget, self._capabilities)
 
-        tool_defs = self.tool_registry.list_tools()
-        system_prompt = self._build_system_prompt(tool_defs)
+        # Detect simple task first (before system prompt construction)
+        _simple_task = (
+            not any(k in task.lower() for k in ["refactor", "debug", "fix", "analyze", "explain", "find", "search", "test"])
+            and len(task) < 200
+        )
 
-        # Build context
-        context_bundle = self.context_engine.build(task, token_budget=token_budget)
-        context_text = context_bundle.format_prompt_context()
+        tool_defs = self.tool_registry.list_tools()
+        system_prompt = self._build_system_prompt(tool_defs, compact=_simple_task)
+
+        # Build context — skip expensive scan for simple single-file tasks
+        if _simple_task:
+            context_text = "(Minimal context — simple task detected, no deep scan needed.)"
+        else:
+            context_bundle = self.context_engine.build(task, token_budget=token_budget)
+            context_text = context_bundle.format_prompt_context()
 
         # Conversation history (recent turns for follow-up understanding)
         history_text = ""
@@ -377,10 +421,11 @@ class AutonomousAgent:
             )
 
             obs_history = self._format_obs_history()
+            # Use compact prompt for simple tasks: shorter = faster LLM response
             full_prompt = (
                 f"{current_prompt}\n"
                 f"EXECUTION LOG (step {iteration}/{self.max_iterations}):\n{obs_history}\n\n"
-                "What is the next action? Respond with a tool call JSON block or a final summary."
+                "Next action: respond with ONE tool call JSON or a plain-text final summary (no JSON)."
             )
 
             response_text = self._call_llm(full_prompt, system_prompt)
@@ -501,6 +546,36 @@ class AutonomousAgent:
                     f"\n[TOOL RESULT] {call.tool} → exit={obs.get('exit_code', 0)}\n"
                     f"stdout: {stdout_snip}\nstderr: {stderr_snip}\n"
                 )
+
+                # ── Smart auto-completion ──────────────────────────────────────────
+                # If this was the only tool call in the LLM response AND it succeeded
+                # AND it was a write/create operation → no need for another LLM round trip.
+                # This saves one full LLM call (~57-80s on CPU hardware).
+                _write_tools = {"write_file", "create_file", "patch_file", "replace_text", "insert_text", "delete_text"}
+                if (
+                    len(calls) == 1
+                    and call.tool in _write_tools
+                    and obs.get("exit_code") == 0
+                    and _simple_task
+                ):
+                    path_written = call.args.get("path", "file")
+                    auto_summary = f"Done. Created/updated `{path_written}` successfully."
+                    if files_changed:
+                        self.memory.record_modification(
+                            ", ".join(list(files_changed)[:5]),
+                            "agent_task",
+                            f"Task: {task[:100]}",
+                        )
+                    self._set_state(AgentState.COMPLETED)
+                    self._emit("completed", {"summary": auto_summary, "files_changed": sorted(files_changed)})
+                    default_resource_manager.cleanup_execution(self.execution_id)
+                    return AgentTaskResult(
+                        status=AgentState.COMPLETED, task=task,
+                        summary=auto_summary,
+                        files_changed=sorted(files_changed), tool_history=self.history,
+                        execution_id=self.execution_id,
+                    )
+                # ──────────────────────────────────────────────────────────────────
 
                 # Self-correction on failures
                 if obs.get("exit_code") != 0 and call.tool in {
@@ -662,15 +737,37 @@ class AutonomousAgent:
     # System prompt
     # ------------------------------------------------------------------
 
-    def _build_system_prompt(self, tool_defs: list[dict[str, Any]]) -> str:
-        tools_json = json.dumps(tool_defs, indent=2)
+    def _build_system_prompt(self, tool_defs: list[dict[str, Any]], compact: bool = False) -> str:
         caps = self._capabilities
-        protocol_note = ""
-        if caps and caps.native_tool_calling:
-            protocol_note = "This model supports native tool calling. You may also use the JSON block format below."
-        else:
-            protocol_note = "This model uses compatibility mode. Always use the JSON block format to call tools."
+        protocol_note = (
+            "This model supports native tool calling. Use the JSON block format below."
+            if caps and caps.native_tool_calling
+            else "Always use JSON block format for tool calls."
+        )
 
+        if compact:
+            # Compact mode: just tool names + one-line descriptions (much fewer tokens)
+            tool_lines = "\n".join(
+                f'  "{t["name"]}": {t.get("description", "")[:80]}'
+                for t in tool_defs
+            )
+            return f"""You are an autonomous AI coding agent inside Vibe Studio IDE. {protocol_note}
+
+TOOL CALL FORMAT (use EXACTLY this):
+```json
+{{"tool": "tool_name", "args": {{"param": "value"}}}}
+```
+
+For final answer with no more tool calls: respond in PLAIN TEXT ONLY (no JSON, no code blocks).
+
+AVAILABLE TOOLS:
+{tool_lines}
+
+RULES: Read files before editing. Use smallest change possible. Verify after editing.
+"""
+
+        # Full prompt with complete schema
+        tools_json = json.dumps(tool_defs, indent=2)
         return f"""You are an autonomous AI coding agent inside Vibe Studio IDE.
 {protocol_note}
 
@@ -709,11 +806,63 @@ AVAILABLE TOOLS:
 
     def _fallback_deterministic_step(self, prompt: str) -> str:
         """Rule-based fallback — handles common patterns without an LLM."""
-        task = prompt.lower()
+        # Extract user request cleanly from prompt wrapper
+        raw_task = prompt
+        if "USER REQUEST:" in prompt:
+            try:
+                part = prompt.split("USER REQUEST:")[1]
+                for header in ["\nCONVERSATION HISTORY", "\nPROJECT MEMORY", "\nPROJECT FILE CONTEXT", "\nEXECUTION LOG"]:
+                    if header in part:
+                        part = part.split(header)[0]
+                raw_task = part.strip()
+            except Exception:
+                raw_task = prompt
+        task = raw_task.lower().strip()
         hist_len = len(self.history)
 
         def _tc(name: str, args: dict) -> str:
             return f"```json\n{json.dumps({'tool': name, 'args': args}, ensure_ascii=False)}\n```"
+
+        # Conversational greetings
+        words = task.split()
+        if (
+            len(task) < 40
+            and not any(k in task for k in ["create", "yarat", "yaz", "file", "fayl", "make", "code", "run", "delete", "sil", "clear", "boşalt"])
+            and any(w in words for w in ["salam", "hello", "hi", "hey", "sa", "necəsn", "necesen", "günaydın", "gunaydin"])
+        ):
+            return (
+                "Salam! Mən Vibe Studio AI köməkçisiyəm. "
+                "Layihənizdə sizə necə kömək edə bilərəm? "
+                "(Məsələn: fayl yaratmaq, funksiyanı düzəltmək, testləri işə salmaq və s.)"
+            )
+
+        # Target file resolution helper (scoped strictly to raw_task and current context)
+        def _resolve_target_file() -> str | None:
+            import re
+            m = re.search(r"([\w./\\-]+\.(?:py|js|ts|txt|md|html|css|json|yaml|go|rs|c|cpp))", raw_task, re.IGNORECASE)
+            if m:
+                return m.group(1)
+            # Check Active File tag in prompt
+            m_act = re.search(r"\[(?:Active file|Selected code in)\s+([\w./\\-]+\.\w+)\]", prompt, re.IGNORECASE)
+            if m_act:
+                return m_act.group(1)
+            # Check files changed in history
+            if self.history:
+                for step in reversed(self.history):
+                    if step.observation and step.observation.get("files_changed"):
+                        return step.observation["files_changed"][0]
+            # Check existing files in project
+            for candidate in ["hello.html", "index.html", "main.py", "styles.css", "README.md"]:
+                if (self.project_root / candidate).exists():
+                    return candidate
+            return None
+
+        # CLEAR / BOŞALT / EMPTY FILE
+        if any(w in task for w in ["clear", "boşalt", "təmizlə", "empty", "erase"]):
+            target = _resolve_target_file() or "hello.html"
+            if hist_len == 0:
+                return _tc("write_file", {"path": target, "content": ""})
+            return f"Successfully cleared `{target}`."
 
         # Style / background
         if any(w in task for w in ["background", "arxa fon", "gradient", "login", "style", "css"]):
@@ -736,26 +885,53 @@ AVAILABLE TOOLS:
         # Delete
         if any(w in task for w in ["delete", "sil", "remove", "kaldır"]):
             import re
-            m = re.search(r"(?:delete|remove|sil)\s+([\w./\\-]+\.\w+)", prompt, re.IGNORECASE)
+            m = re.search(r"(?:delete|remove|sil)\s+([\w./\\-]+\.\w+)", raw_task, re.IGNORECASE)
             if not m:
-                m = re.search(r"\b([\w./\\-]+\.(?:txt|py|js|ts|md|json|css|html))\b", prompt, re.IGNORECASE)
-            if m and hist_len == 0:
-                return _tc("delete_file", {"path": m.group(1)})
+                m = re.search(r"\b([\w./\\-]+\.(?:txt|py|js|ts|md|json|css|html))\b", raw_task, re.IGNORECASE)
+            target = m.group(1) if m else _resolve_target_file()
+            if target and hist_len == 0:
+                return _tc("delete_file", {"path": target})
             return "Task completed successfully."
 
-        # Create with numbers
-        if any(w in task for w in ["create", "make", "yarat", "yaz", "new file", "write", "add"]):
+        # WRITE / CREATE / ADD FILE
+        if any(w in task for w in ["create", "make", "yarat", "yaz", "new file", "write", "add", "insert", "put"]):
             if ("1 to 20" in task or "1-20" in task or "numbers" in task) and hist_len == 0:
                 content = "\n".join(str(i) for i in range(1, 21))
                 return _tc("write_file", {"path": "numbers.txt", "content": content})
+
             import re
-            m = re.search(r"([\w./\\-]+\.(?:py|js|ts|txt|md|html|css|json|yaml))", prompt, re.IGNORECASE)
-            content = ""
-            code = re.search(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)```", prompt, re.DOTALL)
-            if code:
-                content = code.group(1).strip()
-            if m and hist_len == 0:
-                return _tc("write_file", {"path": m.group(1), "content": content})
+            code = re.search(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)```", raw_task, re.DOTALL)
+            content = code.group(1).strip() if code else ""
+
+            target = _resolve_target_file()
+
+            if not content:
+                if target and target.endswith(".html"):
+                    content = (
+                        "<!DOCTYPE html>\n"
+                        "<html lang=\"en\">\n"
+                        "<head>\n"
+                        "  <meta charset=\"UTF-8\">\n"
+                        "  <title>Simple Page</title>\n"
+                        "</head>\n"
+                        "<body>\n"
+                        "  <h1>Hello World</h1>\n"
+                        "  <p>What is your question?</p>\n"
+                        "</body>\n"
+                        "</html>\n"
+                    )
+                elif target and target.endswith(".py"):
+                    content = "# Simple script\nprint('Hello World')\n"
+                elif "question" in task or "sual" in task:
+                    content = "<!-- Question: What is the main objective of this application? -->\n"
+                else:
+                    content = f"<!-- Created for request: {raw_task} -->\n"
+
+            if not target:
+                target = "hello.html" if "html" in task else "main.py"
+
+            if hist_len == 0:
+                return _tc("write_file", {"path": target, "content": content})
 
         # Tests
         if any(w in task for w in ["test", "pytest"]):
@@ -779,11 +955,17 @@ AVAILABLE TOOLS:
         return "Task completed successfully."
 
     def _find_style_target(self) -> str | None:
+        ignored_parts = {".venv", "venv", "node_modules", ".git", "__pycache__", "build", "dist", ".pytest_cache"}
         for path in sorted(self.project_root.rglob("*")):
             if not path.is_file():
                 continue
+            parts = set(path.parts)
+            if ignored_parts.intersection(parts):
+                continue
             name = path.name.lower()
-            if name.endswith((".css", ".scss", ".sass")) or "style" in name or "login" in name:
+            if name.endswith((".css", ".scss", ".sass", ".html", ".vue", ".jsx", ".tsx")):
+                return path.relative_to(self.project_root).as_posix()
+            if (name.endswith((".py", ".js", ".ts")) and ("style" in name or "login" in name)):
                 return path.relative_to(self.project_root).as_posix()
         return None
 

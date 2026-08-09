@@ -213,6 +213,23 @@ class PatchTools:
             results.append(res)
         return results
 
+    def revert_file_change(self, path: str) -> bool:
+        """Find and revert all snapshots for a specific file path."""
+        target_name = Path(path).name
+        matching = [s for s in self.history if s.path == path or Path(s.path).name == target_name]
+        if not matching:
+            return False
+        self.history = [s for s in self.history if s not in matching]
+        first_snap = matching[0]
+        target_path = self._resolve(first_snap.path)
+        if first_snap.previous_content == "" and first_snap.hash_before == self._hash(""):
+            if target_path.exists():
+                target_path.unlink()
+                return True
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(first_snap.previous_content, encoding="utf-8")
+        return True
+
     def undo_last_change(self) -> bool:
         if not self.history:
             return False
