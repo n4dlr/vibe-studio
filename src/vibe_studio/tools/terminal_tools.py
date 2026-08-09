@@ -15,7 +15,15 @@ class TerminalTools:
     def __init__(self, workspace_root: str | Path):
         self.workspace_root = PathSecurity.normalize_path(workspace_root)
 
-    def execute_command(self, command: str, cwd: str = ".", timeout: int = 60, allow_destructive: bool = False) -> dict[str, Any]:
+    def execute_command(
+        self,
+        command: str,
+        cwd: str = ".",
+        timeout: int = 60,
+        allow_destructive: bool = False,
+        execution_id: str | None = None,
+        cancellation_token: Any = None,
+    ) -> dict[str, Any]:
         work_dir = PathSecurity.validate_workspace_path(self.workspace_root / cwd, self.workspace_root)
         result: CommandResult = CommandSafety.run(
             command,
@@ -23,6 +31,8 @@ class TerminalTools:
             workspace_root=self.workspace_root,
             allow_destructive=allow_destructive,
             timeout=timeout,
+            execution_id=execution_id,
+            cancellation_token=cancellation_token,
         )
         return {
             "tool": "execute_command",

@@ -96,6 +96,10 @@ class ChatService:
     # ------------------------------------------------------------------
 
     def chat(self, prompt: str, autonomy_mode: AutonomyMode = AutonomyMode.AUTO) -> str:
+        import uuid
+        from vibe_studio.agents.tool_call_parser import parse_tool_calls, strip_tool_calls
+        from vibe_studio.core.cancellation import CancellationToken
+
         project_root = (
             Path(self.model_manager.settings.project_path)
             if self.model_manager.settings.project_path
@@ -105,10 +109,12 @@ class ChatService:
         provider = self._get_provider()
         self._provider = provider
         model = self.model_manager.settings.default_model or "llama3.1"
+        token = CancellationToken()
+        exec_id = str(uuid.uuid4())
 
         # Streaming callback forwards chunks to UI as activity events
         def _stream_chunk(chunk: str) -> None:
-            self._emit("stream_chunk", {"chunk": chunk})
+            self._emit("stream_chunk", {"chunk": chunk, "execution_id": exec_id})
 
         self._agent = AutonomousAgent(
             project_root=project_root,
@@ -116,6 +122,8 @@ class ChatService:
             model=model,
             autonomy_mode=autonomy_mode,
             stream_callback=_stream_chunk,
+            cancellation_token=token,
+            execution_id=exec_id,
         )
 
         # Wire agent events to UI
@@ -129,14 +137,18 @@ class ChatService:
 
         result = self._agent.run(prompt, conversation_history=self._conversation)
 
-        summary = result.summary
+        raw_summary = result.summary
+        # Clean any raw tool call JSON that might linger in summary
+        calls = parse_tool_calls(raw_summary)
+        clean_summary = strip_tool_calls(raw_summary, calls) if calls else raw_summary
+
         if result.files_changed:
-            summary += f"\n\nModified files: {', '.join(result.files_changed)}"
+            clean_summary += f"\n\nModified files: {', '.join(result.files_changed)}"
 
         # Record assistant turn
-        self._conversation.append({"role": "assistant", "content": summary})
+        self._conversation.append({"role": "assistant", "content": clean_summary})
 
-        return summary
+        return clean_summary
 
     # ------------------------------------------------------------------
     # Control

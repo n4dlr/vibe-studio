@@ -178,6 +178,8 @@ class CommandSafety:
         workspace_root: str | Path | None = None,
         allow_destructive: bool = False,
         timeout: int = 60,
+        execution_id: str | None = None,
+        cancellation_token: Any = None,
     ) -> CommandResult:
         work_dir = Path(cwd or Path.cwd()).resolve()
         if workspace_root:
@@ -214,44 +216,103 @@ class CommandSafety:
                 risk_level=assessment.risk_level.value,
             )
 
-        started = time.monotonic()
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=str(work_dir),
-                shell=True,  # noqa: S602  — we've validated above
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            elapsed = time.monotonic() - started
-            return CommandResult(
-                command=command,
-                arguments=_safe_split(command),
-                working_directory=str(work_dir),
-                exit_code=completed.returncode,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
-                duration=elapsed,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                risk_level=assessment.risk_level.value,
-            )
-        except subprocess.TimeoutExpired as exc:
-            elapsed = time.monotonic() - started
-            stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        if cancellation_token and cancellation_token.is_cancelled():
             return CommandResult(
                 command=command,
                 arguments=_safe_split(command),
                 working_directory=str(work_dir),
                 exit_code=-1,
-                stdout=stdout,
-                stderr=f"{stderr}\nCommand timed out after {timeout}s.",
-                duration=elapsed,
+                stdout="",
+                stderr="Operation cancelled prior to command execution.",
+                duration=0.0,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 cancelled=True,
                 risk_level=assessment.risk_level.value,
             )
+
+        started = time.monotonic()
+        try:
+            from vibe_studio.core.resource_manager import default_resource_manager
+
+            # Create Popen directly with process group on Posix so process tree can be killed cleanly
+            start_new_session = os.name != "nt"
+            proc = subprocess.Popen(
+                command,
+                cwd=str(work_dir),
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=start_new_session,
+            )
+
+            if execution_id:
+                default_resource_manager.register_subprocess(execution_id, proc)
+
+            try:
+                # Wait with timeout polling to support fast cancellation check
+                poll_interval = 0.2
+                elapsed = 0.0
+                stdout_data, stderr_data = "", ""
+
+                while True:
+                    if cancellation_token and cancellation_token.is_cancelled():
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=1.0)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                        return CommandResult(
+                            command=command,
+                            arguments=_safe_split(command),
+                            working_directory=str(work_dir),
+                            exit_code=-1,
+                            stdout="",
+                            stderr="Command execution cancelled by user.",
+                            duration=time.monotonic() - started,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            cancelled=True,
+                            risk_level=assessment.risk_level.value,
+                        )
+
+                    try:
+                        out, err = proc.communicate(timeout=poll_interval)
+                        stdout_data, stderr_data = out, err
+                        break
+                    except subprocess.TimeoutExpired:
+                        elapsed += poll_interval
+                        if elapsed >= timeout:
+                            proc.kill()
+                            out, err = proc.communicate()
+                            return CommandResult(
+                                command=command,
+                                arguments=_safe_split(command),
+                                working_directory=str(work_dir),
+                                exit_code=-1,
+                                stdout=out or "",
+                                stderr=f"{err or ''}\nCommand timed out after {timeout}s.",
+                                duration=time.monotonic() - started,
+                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                cancelled=True,
+                                risk_level=assessment.risk_level.value,
+                            )
+
+                elapsed = time.monotonic() - started
+                return CommandResult(
+                    command=command,
+                    arguments=_safe_split(command),
+                    working_directory=str(work_dir),
+                    exit_code=proc.returncode,
+                    stdout=stdout_data,
+                    stderr=stderr_data,
+                    duration=elapsed,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    risk_level=assessment.risk_level.value,
+                )
+
+            finally:
+                pass
+
         except Exception as exc:
             elapsed = time.monotonic() - started
             return CommandResult(

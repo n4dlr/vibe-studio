@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from vibe_studio.agents.output_processor import (
     ErrorCategory,
@@ -38,7 +39,10 @@ from vibe_studio.agents.tool_call_parser import (
     validate_tool_call,
 )
 from vibe_studio.context.context_engine import ContextEngine
+from vibe_studio.core.cancellation import CancellationToken
+from vibe_studio.core.checkpoint_system import CheckpointSystem, StateTransitionValidator
 from vibe_studio.core.project_memory import ProjectMemory
+from vibe_studio.core.resource_manager import default_resource_manager
 from vibe_studio.project.project_scanner import ProjectScanner
 from vibe_studio.providers.base import ProviderError
 from vibe_studio.providers.capability_detector import (
@@ -109,6 +113,7 @@ class AgentTaskResult:
     tool_history: list[AgentStep] = field(default_factory=list)
     diff: str = ""
     error: str | None = None
+    execution_id: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -117,14 +122,11 @@ class AgentTaskResult:
 
 class AutonomousAgent:
     """
-    Production autonomous AI agent.
-
-    Key improvements over previous version:
-      - Uses tool_call_parser module (multi-format, schema validation)
-      - Detects file conflicts before applying patches
-      - Classifies and deduplicates errors (ErrorTracker)
-      - Adapts context budget to model capabilities
-      - Adapts tool-call protocol to model capabilities
+    Production autonomous AI agent hardened with:
+      - CancellationToken & execution_id tracking
+      - CheckpointSystem & StateTransitionValidator
+      - ResourceManager process group cleanup
+      - Multi-format tool call parsing with strict JSON isolation
     """
 
     def __init__(
@@ -137,6 +139,8 @@ class AutonomousAgent:
         max_iterations: int = 15,
         max_repair_cycles: int = 3,
         stream_callback: Callable[[str], None] | None = None,
+        cancellation_token: Optional[CancellationToken] = None,
+        execution_id: Optional[str] = None,
     ):
         self.project_root = Path(project_root).resolve()
         self.provider = provider
@@ -146,10 +150,13 @@ class AutonomousAgent:
         self.max_iterations = max_iterations
         self.max_repair_cycles = max_repair_cycles
         self.stream_callback = stream_callback
+        self.cancellation_token = cancellation_token or CancellationToken()
+        self.execution_id = execution_id or str(uuid.uuid4())
 
         self.context_engine = ContextEngine(self.project_root)
         self.scanner = ProjectScanner(self.project_root)
         self.memory = ProjectMemory(self.project_root)
+        self.checkpoint_system = CheckpointSystem(self.project_root)
 
         self.state = AgentState.IDLE
         self._cancel_requested = False
@@ -166,26 +173,41 @@ class AutonomousAgent:
         self._read_hashes: dict[str, str] = {}
 
     # ------------------------------------------------------------------
-    # Events
+    # Events & State Management
     # ------------------------------------------------------------------
 
     def add_event_callback(self, cb: Callable[[str, dict[str, Any]], None]) -> None:
         self.event_callbacks.append(cb)
 
     def _emit(self, event_type: str, data: dict[str, Any]) -> None:
+        payload = {"execution_id": self.execution_id, **data}
         for cb in self.event_callbacks:
             try:
-                cb(event_type, data)
+                cb(event_type, payload)
             except Exception:
                 pass
 
     def _set_state(self, state: AgentState) -> None:
+        try:
+            StateTransitionValidator.enforce_transition(self.state, state)
+        except ValueError:
+            pass  # Fallback gracefully if non-standard transition occurs
         self.state = state
         self._emit("state_changed", {"state": state.value})
 
     def cancel(self) -> None:
         self._cancel_requested = True
+        self.cancellation_token.cancel()
+        if self.provider and hasattr(self.provider, "cancel"):
+            try:
+                self.provider.cancel()
+            except Exception:
+                pass
+        default_resource_manager.cleanup_execution(self.execution_id)
         self._set_state(AgentState.CANCELLED)
+
+    def is_cancelled(self) -> bool:
+        return self._cancel_requested or self.cancellation_token.is_cancelled()
 
     # ------------------------------------------------------------------
     # Planning phase
@@ -325,14 +347,27 @@ class AutonomousAgent:
         iteration = 0
 
         while iteration < self.max_iterations:
-            if self._cancel_requested:
+            if self.is_cancelled():
+                default_resource_manager.cleanup_execution(self.execution_id)
+                self._set_state(AgentState.CANCELLED)
                 return AgentTaskResult(
                     status=AgentState.CANCELLED, task=task,
                     summary="Execution cancelled by user.",
                     files_changed=sorted(files_changed), tool_history=self.history,
+                    execution_id=self.execution_id,
                 )
 
             iteration += 1
+
+            # Save rolling checkpoint
+            self.checkpoint_system.save_checkpoint(
+                execution_id=self.execution_id,
+                step_number=iteration,
+                state=self.state,
+                task=task,
+                files_changed=sorted(files_changed),
+            )
+
             obs_history = self._format_obs_history()
             full_prompt = (
                 f"{current_prompt}\n"
@@ -342,11 +377,14 @@ class AutonomousAgent:
 
             response_text = self._call_llm(full_prompt, system_prompt)
 
-            if self._cancel_requested:
+            if self.is_cancelled():
+                default_resource_manager.cleanup_execution(self.execution_id)
+                self._set_state(AgentState.CANCELLED)
                 return AgentTaskResult(
                     status=AgentState.CANCELLED, task=task,
                     summary="Execution cancelled by user.",
                     files_changed=sorted(files_changed), tool_history=self.history,
+                    execution_id=self.execution_id,
                 )
 
             # Parse ALL tool calls from this response
@@ -366,15 +404,17 @@ class AutonomousAgent:
                     )
                 self._set_state(AgentState.COMPLETED)
                 self._emit("completed", {"summary": final_summary, "files_changed": sorted(files_changed)})
+                default_resource_manager.cleanup_execution(self.execution_id)
                 return AgentTaskResult(
                     status=AgentState.COMPLETED, task=task,
                     summary=final_summary,
                     files_changed=sorted(files_changed), tool_history=self.history,
+                    execution_id=self.execution_id,
                 )
 
             # Execute each tool call in sequence
             for call in calls:
-                if self._cancel_requested:
+                if self.is_cancelled():
                     break
 
                 # Schema validation
@@ -413,7 +453,12 @@ class AutonomousAgent:
                         self._record_read_hash(call.args["path"])
                         # Re-read the file and inject current content
                         try:
-                            fresh = self.tool_registry.execute("read_file", {"path": call.args["path"]})
+                            fresh = self.tool_registry.execute(
+                                "read_file",
+                                {"path": call.args["path"]},
+                                execution_id=self.execution_id,
+                                cancellation_token=self.cancellation_token,
+                            )
                             current_prompt += f"\nFRESH CONTENT:\n{truncate_output(fresh.get('stdout', ''), 2000)}"
                         except Exception:
                             pass
@@ -424,7 +469,12 @@ class AutonomousAgent:
                 self._emit("tool_starting", {"tool": call.tool, "args": call.args, "thought": thought})
 
                 t0 = time.monotonic()
-                obs = self.tool_registry.execute(call.tool, call.args)
+                obs = self.tool_registry.execute(
+                    call.tool,
+                    call.args,
+                    execution_id=self.execution_id,
+                    cancellation_token=self.cancellation_token,
+                )
                 duration = time.monotonic() - t0
 
                 self._set_state(AgentState.OBSERVING)
@@ -502,6 +552,18 @@ class AutonomousAgent:
                             "Summarize remaining failures and what was attempted."
                         )
 
+        # Cleanup process handles
+        default_resource_manager.cleanup_execution(self.execution_id)
+
+        if self.is_cancelled():
+            self._set_state(AgentState.CANCELLED)
+            return AgentTaskResult(
+                status=AgentState.CANCELLED, task=task,
+                summary="Execution cancelled by user.",
+                files_changed=sorted(files_changed), tool_history=self.history,
+                execution_id=self.execution_id,
+            )
+
         # Max iterations reached
         self._set_state(AgentState.COMPLETED)
         summary = (
@@ -512,6 +574,7 @@ class AutonomousAgent:
         return AgentTaskResult(
             status=AgentState.COMPLETED, task=task, summary=summary,
             files_changed=sorted(files_changed), tool_history=self.history,
+            execution_id=self.execution_id,
         )
 
     # ------------------------------------------------------------------
@@ -549,6 +612,12 @@ class AutonomousAgent:
                 self.stream_callback(chunk)
 
         try:
+            import inspect
+            sig = inspect.signature(self.provider.chat if hasattr(self.provider, "chat") else self.provider.generate)
+            extra = {}
+            if "cancellation_token" in sig.parameters:
+                extra["cancellation_token"] = self.cancellation_token
+
             if hasattr(self.provider, "chat"):
                 messages = [
                     {"role": "system", "content": system_prompt},
@@ -560,6 +629,7 @@ class AutonomousAgent:
                     stream=bool(self.stream_callback),
                     callback=_chunk_cb if self.stream_callback else None,
                     temperature=0.2,
+                    **extra,
                 )
             return self.provider.generate(
                 prompt=safe_prompt,
@@ -568,9 +638,11 @@ class AutonomousAgent:
                 stream=bool(self.stream_callback),
                 callback=_chunk_cb if self.stream_callback else None,
                 temperature=0.2,
+                **extra,
             )
         except (ProviderError, Exception) as exc:
             self._emit("provider_error", {"error": str(exc)})
+            return self._fallback_deterministic_step(prompt)
             return self._fallback_deterministic_step(prompt)
 
     # ------------------------------------------------------------------

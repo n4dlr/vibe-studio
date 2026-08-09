@@ -224,13 +224,28 @@ class ToolRegistry:
     # Execution
     # ------------------------------------------------------------------
 
-    def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+    def execute(
+        self,
+        name: str,
+        args: dict[str, Any],
+        execution_id: str | None = None,
+        cancellation_token: Any = None,
+    ) -> dict[str, Any]:
+        if cancellation_token and cancellation_token.is_cancelled():
+            return _error_result(name, f"Execution of tool '{name}' cancelled prior to execution.")
+
         tool = self.get(name)
         if not tool:
             return _error_result(name, f"Unknown tool: '{name}'. Use list_tools to see available tools.")
 
-        # Coerce then validate
+        # Coerce, sanitize, then validate
         args = self._coerce_args(tool, args)
+        try:
+            from vibe_studio.security.input_sanitizer import InputSanitizer
+            args = InputSanitizer.sanitize_args(name, args, self.workspace_root)
+        except Exception as sanitize_err:
+            return _error_result(name, f"Security sanitization error: {sanitize_err}")
+
         ok, err = self._validate_args(tool, args)
         if not ok:
             return _error_result(name, err)
@@ -239,7 +254,15 @@ class ToolRegistry:
         start_time = time.monotonic()
 
         try:
-            raw_res = tool.handler(**args)
+            import inspect
+            sig = inspect.signature(tool.handler)
+            extra_args = {}
+            if "execution_id" in sig.parameters:
+                extra_args["execution_id"] = execution_id
+            if "cancellation_token" in sig.parameters:
+                extra_args["cancellation_token"] = cancellation_token
+
+            raw_res = tool.handler(**args, **extra_args)
             duration = time.monotonic() - start_time
             self._snapshot_after(name, args)
             return _normalise_result(name, raw_res, args, duration)

@@ -4,10 +4,12 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from vibe_studio.core.cancellation import CancellationToken
+from vibe_studio.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenException
 from vibe_studio.providers.base import ModelInfo, ProviderError
 
 
@@ -25,6 +27,7 @@ class OpenAICompatibleProvider:
         self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("CUSTOM_API_KEY") or ""
         self.timeout = timeout
         self._cancel_event = threading.Event()
+        self.circuit_breaker = CircuitBreaker(name="openai_compatible")
 
     # ------------------------------------------------------------------
     # Model discovery
@@ -80,6 +83,7 @@ class OpenAICompatibleProvider:
         system_prompt: str | None = None,
         stream: bool = False,
         callback: Callable[[str], None] | None = None,
+        cancellation_token: Optional[CancellationToken] = None,
         temperature: float = 0.2,
         max_tokens: int = 4096,
         **kwargs: Any,
@@ -98,6 +102,7 @@ class OpenAICompatibleProvider:
             model=model,
             stream=stream,
             callback=callback,
+            cancellation_token=cancellation_token,
             temperature=temperature,
             max_tokens=max_tokens,
             **kwargs,
@@ -110,56 +115,61 @@ class OpenAICompatibleProvider:
         model: str,
         stream: bool = False,
         callback: Callable[[str], None] | None = None,
+        cancellation_token: Optional[CancellationToken] = None,
         temperature: float = 0.2,
         max_tokens: int = 4096,
         **kwargs: Any,
     ) -> str:
         self._reset_cancel()
 
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "stream": bool(stream and callback),
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        def _do_chat():
+            payload: dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                "stream": bool(stream and callback),
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
-        req = Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        timeout = kwargs.get("timeout", self.timeout)
+            req = Request(
+                f"{self.base_url}/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            timeout = kwargs.get("timeout", self.timeout)
 
-        try:
-            if stream and callback:
-                return self._stream_chat(req, callback, timeout)
-            with urlopen(req, timeout=timeout) as resp:
-                body = resp.read().decode("utf-8")
-            result = json.loads(body)
-            choices = result.get("choices", [])
-            if choices:
-                return choices[0].get("message", {}).get("content", "")
-            return ""
-        except (HTTPError, URLError, TimeoutError) as exc:
-            raise ProviderError(f"OpenAI-compatible request failed: {exc}") from exc
-        except json.JSONDecodeError as exc:
-            raise ProviderError("OpenAI-compatible provider returned malformed JSON") from exc
+            try:
+                if stream and callback:
+                    return self._stream_chat(req, callback, timeout, cancellation_token)
+                with urlopen(req, timeout=timeout) as resp:
+                    body = resp.read().decode("utf-8")
+                result = json.loads(body)
+                choices = result.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "")
+                return ""
+            except (HTTPError, URLError, TimeoutError) as exc:
+                raise ProviderError(f"OpenAI-compatible request failed: {exc}") from exc
+            except json.JSONDecodeError as exc:
+                raise ProviderError("OpenAI-compatible provider returned malformed JSON") from exc
+
+        return self.circuit_breaker.call(_do_chat)
 
     def _stream_chat(
         self,
         req: Request,
         callback: Callable[[str], None],
         timeout: int,
+        cancellation_token: Optional[CancellationToken] = None,
     ) -> str:
         chunks: list[str] = []
         with urlopen(req, timeout=timeout) as resp:
             for raw_line in resp:
-                if self._cancel_event.is_set():
+                if self._cancel_event.is_set() or (cancellation_token and cancellation_token.is_cancelled()):
                     break
                 line = raw_line.decode("utf-8").strip()
                 if not line or not line.startswith("data: "):
@@ -176,3 +186,4 @@ class OpenAICompatibleProvider:
                     chunks.append(delta)
                     callback(delta)
         return "".join(chunks)
+

@@ -573,10 +573,18 @@ class MainWindow(QMainWindow):
     def _stop_agent(self) -> None:
         if self._agent_worker:
             self._agent_worker.cancel()
-        self.chat.append("<b style='color:#f59e0b;'>System:</b> Stop requested.\n")
-        self._set_status("Agent stop requested.")
+        if self.chat_service:
+            self.chat_service.cancel_current_agent()
+        if self._agent_thread and self._agent_thread.isRunning():
+            self._agent_thread.quit()
+            self._agent_thread.wait(200)
+
+        self.chat.append("<b style='color:#f59e0b;'>System:</b> Execution cancelled.\n")
+        self._set_status("Agent cancelled.")
         self.send_btn.setEnabled(True)
         self.send_btn.setText("▶  Send Task")
+        self._status_state_label.setText("Agent: Idle")
+        self._streaming_response = False
 
     def _refresh_changes_panel(self) -> None:
         """Populate the Changes panel with diffs from the most recent agent task."""
@@ -1191,6 +1199,13 @@ class _ChangesPanel(QWidget):
             + "".join(html_parts)
             + "</pre>"
         )
+
+    def closeEvent(self, event) -> None:
+        self._stop_agent()
+        if self._agent_thread and self._agent_thread.isRunning():
+            self._agent_thread.quit()
+            self._agent_thread.wait(500)
+        super().closeEvent(event)
 
     def _undo_all(self) -> None:
         main_win = self.window()
