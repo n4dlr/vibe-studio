@@ -273,115 +273,39 @@ pytest tests/test_integration.py  # will use running Ollama if available
 
 ---
 
-## Completed Production IDE Capabilities & Architecture
+## Features
 
-- **12-Pillar Ultimate AI IDE Architecture**:
-  1. **Infinite Context Engine (Local RAG)**: AST file chunking, SQLite index database (`.vibe_studio/index.db`), token budgeting, and optional `sentence-transformers` vector search.
-  2. **Mixture of Agents (MoA) & Judge Agent**: Parallel candidate proposal generation via `ThreadPoolExecutor` and diff quality evaluation by `ReviewerAgent`.
-  3. **Self-Healing TDD Loop**: Automatic transition to `FIXING` state on test failures, traceback fingerprint tracking, and line-number repair hints.
-  4. **Broad Plugin Ecosystem (`@vibe_plugin`)**: `PluginManager` discovers third-party tools in `.vibe_studio/plugins/` and registers them dynamically in `ToolRegistry`.
-  5. **Local Network Collaboration & Streaming**: Live event streaming and peer IDE activity broadcasting via `APIServerHandler`.
-  6. **Monorepo Incremental Scanner**: Persistent SQLite symbol index with hash-based incremental rescan optimization.
-  7. **Proactive Code Intelligence (LSP)**: `LSPContextProvider` symbol reference & hover pre-analysis injected into agent planning prompts.
-  8. **Zero Trust Native Sandboxing**: Zero-dependency host process isolation, workspace boundary enforcement (`PathSecurity`), and audit logging without Docker.
-  9. **Visual Agent Thought Chain**: Interactive UI timeline cards for agent reasoning and tool executions.
-  10. **Turbo Mode & Fast-Path Prompt Caching**: Compact prompt fast-paths for single-file edits and smart post-write auto-completion.
-  11. **Persistent Project Memory**: SQLite project memory (`.vibe_studio/memory.db`) storing task history, error fixes, and project context hints.
-  12. **Playground & Chat Persistence**: Auto-persisted conversation history (`.vibe_studio/chat_history.json`), clear chat, and Markdown export (`📥`).
-- **Production-Grade LSP Protocol & Fallback Engine (`LSPClient` & `CodeIntelligenceEngine`)**:
-  - **LSP-First Router**: `CodeIntelligenceEngine` routes all definition, references, hover, completion, document symbols, and workspace symbols through LSP servers when available and healthy, seamlessly falling back to AST (Python) and regex symbol indexing when LSP servers are missing or timed out.
-  - **Server Discovery (`LSPServerRegistry`)**: Automatic discovery and metadata management for `pyright-langserver`, `pylsp`, `typescript-language-server`, `gopls`, `rust-analyzer`, `clangd`, and `vscode-langservers-extracted`.
-  - **Monotonic Document Synchronization**: Maintains `DocumentState` with monotonic version increments across `didOpen`, `didChange`, `didSave`, and `didClose` notifications.
-  - **Diagnostics & Problems UI Integration**: Live `textDocument/publishDiagnostics` streaming to the Problems Panel and editor decorations with click-to-navigate.
-  - **Stale Response Protection & Async UI Safety**: GUI thread never freezes; all LSP requests feature timeouts and stale-version guards.
-  - **Agent Semantic Tools**: Exposes `lsp_goto_definition`, `lsp_find_references`, `lsp_hover`, `lsp_get_diagnostics`, `lsp_document_symbols`, and `lsp_workspace_symbols` to the `AutonomousAgent`.
-- **Multi-Agent Orchestration**: `AgentOrchestrator` (`src/vibe_studio/agents/orchestrator.py`) coordinates `IntentPredictor`, `NavigatorAgent`, `ContextEngine`, `AutonomousAgent`, `ReviewerAgent`, and `DebugAssistant` into a unified pipeline.
-- **Code Intelligence & Autocomplete**: Go-to-Definition (`F12`), Hover docstrings, Find References, and `QCompleter` autocomplete (`Ctrl+Space`).
-- **Real-Time File Watching**: `WorkspaceFileWatcher` (`src/vibe_studio/filesystem/file_watcher.py`) auto-refreshes file explorer, Git status, and open editor tabs on external disk modifications, invalidating symbol caches while protecting unsaved user edits.
-- **Large-Project Context Engine**: Import-graph dependency ranking and token-budgeted scoring select relevant files accurately for projects with 1000+ files.
-- **Offline & Model Fallback**: Graceful fallback to deterministic rule-based execution when Ollama or remote LLM APIs are offline.
+- **Context Engine (Local RAG)**: AST file chunking, SQLite index (`.vibe_studio/index.db`), token budgeting, optional `sentence-transformers` vector search.
+- **Multi-Agent Review**: Parallel candidate proposals via `ThreadPoolExecutor`, diff quality evaluated by `ReviewerAgent`.
+- **Self-Healing Test Loop**: Auto-transitions to `FIXING` state on test failures; tracks traceback fingerprints to avoid infinite loops.
+- **Plugin System (`@vibe_plugin`)**: `PluginManager` loads third-party tools from `.vibe_studio/plugins/` and registers them in `ToolRegistry`.
+- **Local Network Streaming**: Live event streaming and peer IDE activity broadcasting via `APIServerHandler`.
+- **Monorepo Incremental Scanner**: SQLite symbol index with hash-based incremental rescan; skips unchanged files.
+- **LSP Code Intelligence**: `LSPContextProvider` pre-fetches symbol references and hover info before agent planning.
+- **Workspace Sandboxing**: Host-native process isolation, workspace boundary enforcement (`PathSecurity`), audit logging.
+- **Agent Activity Timeline**: Interactive UI cards showing agent reasoning steps and tool calls in real time.
+- **Turbo Mode**: Compact prompt fast-paths for single-file edits; post-write auto-completion.
+- **Project Memory**: SQLite-backed memory (`.vibe_studio/memory.db`) stores task history, error fixes, and context hints.
+- **Chat Persistence**: Conversation history auto-saved to `.vibe_studio/chat_history.json`; Markdown export (`📥`).
 
----
+### LSP Protocol & Fallback
 
-## 🚀 Vibe Studio 2.0 Architecture
+- **Routing**: All go-to-definition, references, hover, completion, and symbol requests go through LSP first — falls back to AST (Python) or regex when LSP is unavailable or times out.
+- **Server Discovery**: Auto-detects `pyright-langserver`, `pylsp`, `typescript-language-server`, `gopls`, `rust-analyzer`, `clangd`, `vscode-langservers-extracted`.
+- **Document Sync**: Monotonic version increments across `didOpen`, `didChange`, `didSave`, `didClose`.
+- **Diagnostics**: Live `textDocument/publishDiagnostics` piped to Problems Panel with click-to-navigate.
+- **UI Safety**: GUI thread never blocks; all LSP calls have timeouts and stale-version guards.
+- **Agent tools**: `lsp_goto_definition`, `lsp_find_references`, `lsp_hover`, `lsp_get_diagnostics`, `lsp_document_symbols`, `lsp_workspace_symbols`.
 
-Vibe Studio 2.0 implements 7 fundamental architectural pillars for enterprise-grade autonomous coding:
+### Agent Pipeline
 
-1. **Graph RAG (`src/vibe_studio/context/graph_rag.py`)**: AST call and inheritance graph (`networkx.DiGraph`) expanding structural context beyond plain vector text matching.
-2. **Evolutionary Agent (`src/vibe_studio/agents/evolutionary_strategy.py`)**: Population-based strategy pool using roulette-wheel selection and task-specific fitness evolution.
-3. **Root Cause Analysis (`src/vibe_studio/agents/root_cause_analyzer.py`)**: AST data-flow assignment tracing + `ErrorFingerprint` to break self-healing loops.
-4. **Plugin Subprocess Sandbox (`src/vibe_studio/plugin/plugin_worker.py`)**: JSON-RPC subprocess isolation for `HIGH`-risk plugin tools with workspace path enforcement.
-5. **Adaptive Turbo Mode (`src/vibe_studio/agents/complexity_classifier.py`)**: 3-tier task routing (`FAST` sub-second, `NORMAL` standard, `DEEP` full Graph RAG + MoA).
-6. **Explainable AI (`src/vibe_studio/ui/ai_activity_panel.py`)**: `REASON:` prefix parsing rendering visual yellow `💡 Reason:` badges on activity cards.
----
-
-# Vibe Studio 5.0 "Omniverse"
-
-> **AI-Native Autonomous Coding Agent & Web/Distributed/Security IDE Platform**
-
-Vibe Studio is an enterprise-grade, zero-trust AI coding assistant and IDE system built for local, web, distributed agent swarms, and AI security auditing.
+- **Orchestrator**: `AgentOrchestrator` wires `IntentPredictor` → `NavigatorAgent` → `ContextEngine` → `AutonomousAgent` → `ReviewerAgent` → `DebugAssistant`.
+- **Code Intelligence**: Go-to-Definition (`F12`), hover docstrings, Find References, `QCompleter` (`Ctrl+Space`).
+- **File Watching**: Auto-refreshes explorer, Git status, and open tabs on external changes; protects unsaved edits.
+- **Large Projects**: Import-graph ranking + token budgeting handle 1000+ file codebases.
+- **Offline Mode**: Deterministic rule-based fallback when Ollama or remote APIs are unavailable.
 
 ---
-
-## 🌌 What's New in Vibe Studio 5.0 "Omniverse"
-
-1. **🎯 Intelligent Skill-Based Swarm Routing**:
-   - Swarm Workers register specialized skills (`python`, `security`, `refactor`, `test`).
-   - Swarm Coordinator intelligently routes tasks based on skill-matching, workload, and performance rating score.
-
-2. **🔍 Natural Language Code Search**:
-   - Query code in plain language (e.g., `vibe-studio search "məlumat bazasına qoşulan hissə haradadır?"`).
-   - Combines AST Symbol indexing with intent/synonym expansion.
-
-3. **📚 Auto-Documentation Engine**:
-   - Auto-generates `API_REFERENCE.md` and Mermaid.js class architecture diagrams (`vibe-studio doc`).
-
-4. **🔍 Automated PR Code Review Agent**:
-   - Analyzes git diffs for security credentials, performance bottlenecks, and type hint hints (`vibe-studio review --diff patch.diff`).
-
-5. **🛡️ AI Security Auditor**:
-   - Scans projects for secret leaks (AWS keys, GitHub tokens) and AST security vulnerabilities (`vibe-studio audit`).
-
----
-
-## 🌌 What's New in Vibe Studio 4.0 "Cosmic"
-
-1. **🐝 Distributed Agent Swarm**:
-   - Multi-node coordinator & worker cluster protocol (JSON-RPC 2.0).
-   - Distribute heavy coding tasks, test generation, and refactoring across local networks.
-   - CLI: `vibe-studio swarm coordinator` & `vibe-studio swarm worker`.
-
-2. **⚡ Real-Time WebSocket Event Stream**:
-   - Live RFC 6455 WebSocket server (`ws://127.0.0.1:8001`) broadcasting agent thought chains and progress.
-
-3. **🔌 In-Repo Plugin Marketplace (32+ Enterprise Plugins)**:
-   - 32 built-in plugins across DevOps, Cloud, Databases, Testing, Security, and APIs.
-   - CLI: `vibe-studio plugin list`, `vibe-studio plugin search <query>`, `vibe-studio plugin install <name>`.
-
-4. **🔮 Predictive Coding Engine**:
-   - Real-time action recommendations based on editor state, AST file structure, and historical project memory.
-
-5. **🌐 Glassmorphism Web UI SPA**:
-   - Headless & browser-accessible UI served at `http://127.0.0.1:8000`.
-   - Real-time log streaming, predictive action bar, and marketplace controls.
-
----
-
-## 🏛️ Vibe Studio 3.0 "Titan" Architecture
-
-Vibe Studio 3.0 expands the IDE into a multi-interface, high-scale enterprise platform:
-
-1. **Multi-core Parallel Graph Builder (`src/vibe_studio/context/parallel_graph_builder.py`)**: `ProcessPoolExecutor` multi-core AST parsing for 100k+ node monorepos.
-2. **Global Memory LRU Cache & Consolidation (`src/vibe_studio/core/global_memory.py`)**: `LRUPatternCache` + `consolidate_patterns()` Jaccard similarity pattern clustering.
-3. **CLI & Headless REST API Server (`src/vibe_studio/cli.py`, `src/vibe_studio/api/http_server.py`)**:
-   - `vibe-studio run "prompt"`: Headless command-line task execution.
-   - `vibe-studio server`: HTTP REST JSON API endpoints (`/health`, `/api/v1/execute`, `/api/v1/graph`, `/api/v1/context`, `/api/v1/memory`).
-   - `vibe-studio index`: Pre-indexes AST call graph on disk.
-4. **Official Enterprise Plugins (`src/vibe_studio/plugin/official/`)**: Pure Python plugins for Git PR descriptions, Webhook/Slack notifications, and Python package inspection.
-5. **Interactive Visual Code Graph UI (`src/vibe_studio/ui/graph_visualizer_widget.py`)**: PySide6 `QGraphicsView` node/edge visualization of the AST CodeGraph.
-6. **Agent Trainer UI (`src/vibe_studio/ui/agent_trainer_dialog.py`)**: GUI dialog for direct manual pattern injection into GlobalMemory.
-7. **Monorepo Stress & Fuzzing Suite (`tests/test_monorepo_stress.py`, `tests/test_security_fuzzing.py`)**: 10,000-file monorepo benchmarks and path traversal security fuzzing tests.
-
 
 ## ⚠️ Disclaimer & Security
 
