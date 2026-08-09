@@ -94,14 +94,17 @@ class FilesystemTools:
 
     def create_file(self, path: str, content: str = "") -> str:
         target = self._resolve(path)
-        if target.exists():
-            raise FileExistsError(f"File already exists: {path}")
-        return self.write_file(path, content)
+        existed = target.exists() and target.stat().st_size > 0
+        res = self.write_file(path, content)
+        if existed:
+            rel = target.relative_to(self.workspace_root).as_posix()
+            return f"Updated existing file '{rel}' successfully. (Note: use patch_file for partial edits)"
+        return res
 
     def delete_file(self, path: str) -> str:
         target = self._resolve(path)
         if not target.exists():
-            raise FileNotFoundError(f"File not found: {path}")
+            return f"File already removed or does not exist: {path}"
         if target.is_dir():
             shutil.rmtree(target)
             return f"Deleted directory: {path}"

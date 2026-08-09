@@ -1294,7 +1294,7 @@ class SettingsDialog(QDialog):
         agent_tab = QWidget()
         agent_form = QFormLayout(agent_tab)
 
-        self.max_iter_edit = QLineEdit("15")
+        self.max_iter_edit = QLineEdit(str(getattr(self.settings, "max_iterations", 30)))
         agent_form.addRow("Max iterations:", self.max_iter_edit)
 
         self.local_only_cb = QCheckBox("Local-only (Ollama, never send code to remote)")
@@ -1419,6 +1419,10 @@ class SettingsDialog(QDialog):
         self.settings.dark_theme = self.dark_theme_cb.isChecked()
         try:
             self.settings.font_size = int(self.font_size_edit.text().strip())
+        except ValueError:
+            pass
+        try:
+            self.settings.max_iterations = int(self.max_iter_edit.text().strip())
         except ValueError:
             pass
 

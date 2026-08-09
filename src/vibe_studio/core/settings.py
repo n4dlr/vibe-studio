@@ -32,6 +32,7 @@ class AppSettings:
     dark_theme: bool = True
     font_size: int = 12
     chat_history_limit: int = 50
+    max_iterations: int = 30
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -42,6 +43,7 @@ class AppSettings:
             "dark_theme": self.dark_theme,
             "font_size": self.font_size,
             "chat_history_limit": self.chat_history_limit,
+            "max_iterations": self.max_iterations,
             "providers": [
                 {
                     "name": p.name,
@@ -71,6 +73,7 @@ class AppSettings:
             dark_theme=bool(data.get("dark_theme", True)),
             font_size=int(data.get("font_size", 12)),
             chat_history_limit=int(data.get("chat_history_limit", 50)),
+            max_iterations=int(data.get("max_iterations", 30)),
             providers=[
                 ProviderConfig(
                     name=str(p.get("name", "")),

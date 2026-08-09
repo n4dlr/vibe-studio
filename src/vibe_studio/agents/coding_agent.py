@@ -142,7 +142,7 @@ class AutonomousAgent:
         model: str = "llama3.1",
         tool_registry: ToolRegistry | None = None,
         autonomy_mode: AutonomyMode = AutonomyMode.AUTO,
-        max_iterations: int = 15,
+        max_iterations: int = 30,
         max_repair_cycles: int = 3,
         stream_callback: Callable[[str], None] | None = None,
         cancellation_token: Optional[CancellationToken] = None,
