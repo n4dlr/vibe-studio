@@ -154,11 +154,15 @@ class ChatService:
         def _stream_chunk(chunk: str) -> None:
             self._emit("stream_chunk", {"chunk": chunk, "execution_id": exec_id})
 
+        s = self.model_manager.settings
+        max_iter = getattr(s, "max_iterations", 30)
+
         self._agent = AutonomousAgent(
             project_root=project_root,
             provider=provider,
             model=model,
             autonomy_mode=autonomy_mode,
+            max_iterations=max_iter,
             stream_callback=_stream_chunk,
             cancellation_token=token,
             execution_id=exec_id,

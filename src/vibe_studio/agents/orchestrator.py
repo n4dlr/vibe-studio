@@ -57,12 +57,14 @@ class AgentOrchestrator:
         model: str = "llama3.1",
         stream_callback: Callable[[str], None] | None = None,
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+        max_iterations: int = 30,
     ):
         self.workspace_root = Path(workspace_root).resolve()
         self.provider = provider
         self.model = model
         self.stream_callback = stream_callback
         self.progress_callback = progress_callback
+        self.max_iterations = max_iterations
 
         self.intent_predictor = IntentPredictor()
         self.navigator = NavigatorAgent(self.workspace_root)
@@ -135,6 +137,7 @@ class AgentOrchestrator:
             provider=self.provider,
             model=self.model,
             autonomy_mode=AutonomyMode.AUTO,
+            max_iterations=self.max_iterations,
             stream_callback=self.stream_callback,
         )
 
@@ -276,6 +279,7 @@ class AgentOrchestrator:
                 provider=self.provider,
                 model=self.model,
                 autonomy_mode=AutonomyMode.AUTO,
+                max_iterations=self.max_iterations,
                 stream_callback=self.stream_callback,
             )
             agent.add_event_callback(lambda etype, d: self._notify_progress(f"agent_{etype}", d))
