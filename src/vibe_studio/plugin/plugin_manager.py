@@ -23,6 +23,7 @@ from vibe_studio.plugin.plugin_api import (
     get_registered_tools,
     list_plugins,
 )
+from vibe_studio.plugin.plugin_worker import PluginWorker
 from vibe_studio.security.path_security import PathSecurity, PathSecurityError
 
 logger = logging.getLogger(__name__)
@@ -156,4 +157,26 @@ class PluginManager:
         return _safe
 
     def _sandbox_tool(self, tool: PluginTool, workspace_root: Path | None) -> Callable[..., Any]:
+        """Wrap a PluginTool in a security sandbox.
+
+        HIGH-risk tools are executed in an isolated subprocess (Sütun 4).
+        LOW/MEDIUM tools use the fast in-process path-traversal guard.
+        """
+        if tool.risk in RISK_APPROVAL_REQUIRED and PluginWorker.is_available():
+            plugin_path = self._loaded_files[-1] if self._loaded_files else ""
+
+            def _subprocess_call(**kwargs: Any) -> Any:
+                return PluginWorker.call(
+                    plugin_path=plugin_path,
+                    tool_name=tool.name,
+                    kwargs=kwargs,
+                    workspace=str(workspace_root) if workspace_root else "",
+                )
+
+            logger.debug(
+                "Plugin '%s' (risk=%s) routed to subprocess sandbox",
+                tool.name, tool.risk,
+            )
+            return _subprocess_call
+
         return self._sandbox(tool.func, workspace_root)

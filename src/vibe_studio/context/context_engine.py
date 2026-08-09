@@ -192,12 +192,15 @@ class ContextEngine:
       +10  important entry-point file
       +5   relevant extension
       +semantic cosine similarity bonus (0-60) when embeddings available
+      +graph-neighbour expansion (Sütun 1) when graph_expand=True
     """
 
-    def __init__(self, root: str | Path, rag_enabled: bool = False):
+    def __init__(self, root: str | Path, rag_enabled: bool = False, graph_expand: bool = False):
         self.root = Path(root).resolve()
         self.rag_enabled = rag_enabled
+        self.graph_expand = graph_expand
         self._index = _FileIndex(self.root)
+        self._graph_expander: object = None  # lazy-init on first build
 
     def _should_skip(self, rel: str, path: Path) -> bool:
         parts = rel.split("/")
@@ -379,4 +382,28 @@ class ContextEngine:
             except Exception:
                 continue
 
-        return ContextBundle(items=items, total_tokens_est=total_tokens, budget=token_budget)
+        bundle = ContextBundle(items=items, total_tokens_est=total_tokens, budget=token_budget)
+
+        # Sütun 1: Graph RAG — expand with structurally related neighbours
+        if self.graph_expand:
+            expander = self._ensure_graph_expander()
+            if expander is not None:
+                try:
+                    bundle = expander.expand(  # type: ignore[union-attr]
+                        bundle,
+                        max_extra_tokens=max(0, token_budget - total_tokens),
+                    )
+                except Exception:
+                    pass
+
+        return bundle
+
+    def _ensure_graph_expander(self) -> object:
+        """Lazy-initialise GraphContextExpander (builds graph on first call)."""
+        if self._graph_expander is None:
+            try:
+                from vibe_studio.context.graph_rag import GraphContextExpander
+                self._graph_expander = GraphContextExpander(self.root)
+            except Exception:
+                pass
+        return self._graph_expander

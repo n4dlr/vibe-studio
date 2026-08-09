@@ -5,19 +5,25 @@ User Prompt -> Intent -> Navigator -> Context -> Coding Agent -> Tools -> Review
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from vibe_studio.agents.coding_agent import AgentState, AgentTaskResult, AutonomousAgent, AutonomyMode
+from vibe_studio.agents.complexity_classifier import ComplexityClassifier, TaskComplexity
 from vibe_studio.agents.debug_assistant import DebugAssistant
+from vibe_studio.agents.evolutionary_strategy import StrategyPool
 from vibe_studio.agents.intent_predictor import IntentPredictor
 from vibe_studio.agents.navigator_agent import NavigatorAgent
 from vibe_studio.agents.reviewer_agent import ReviewerAgent, ReviewResult
 from vibe_studio.context.context_engine import ContextEngine
+from vibe_studio.core.global_memory import GlobalMemory
 from vibe_studio.tools.patch_tools import PatchTools
 from vibe_studio.tools.terminal_tools import TerminalTools
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -65,6 +71,12 @@ class AgentOrchestrator:
         self.debug_assistant = DebugAssistant()
         self.patch_tools = PatchTools(self.workspace_root)
         self.terminal_tools = TerminalTools(self.workspace_root)
+        # Sütun 2: Evolutionary strategy
+        self._strategy_pool = StrategyPool()
+        # Sütun 5: Adaptive complexity classifier
+        self._complexity_clf = ComplexityClassifier()
+        # Sütun 7: Global memory cross-project hints
+        self._global_memory = GlobalMemory()
 
     def _notify_progress(self, stage: str, data: dict[str, Any]) -> None:
         if self.progress_callback:
@@ -88,6 +100,16 @@ class AgentOrchestrator:
         self._notify_progress("navigation_start", {})
         navigated = self.navigator.discover_relevant_files(prompt)
         timings.append(PipelineStageTiming("navigation", time.monotonic() - t0, details=f"Found {len(navigated)} files"))
+
+        # 2b. Adaptive Turbo Mode (Sütun 5)
+        complexity = self._complexity_clf.classify(prompt, active_file, len(navigated))
+        self._notify_progress("complexity_classified", {"tier": complexity.name})
+        logger.debug("Task complexity: %s", complexity.name)
+
+        # 2c. Global memory hint (Sütun 7)
+        global_hint = self._global_memory.build_global_hint(prompt)
+        if global_hint:
+            logger.debug("Global memory hint available (%d chars)", len(global_hint))
 
         # 3. Context Engine Ranking
         t0 = time.monotonic()
@@ -328,11 +350,17 @@ class AgentOrchestrator:
         prompt: str,
         num_candidates: int = 2,
     ) -> OrchestratedExecutionResult:
-        """Run Mixture of Agents (MoA) — generate candidate proposals concurrently, evaluate with Judge Agent, and execute best."""
+        """Run Mixture of Agents (MoA) with Evolutionary Strategy selection.
+
+        Sütun 2: Each candidate uses a fitness-selected strategy from StrategyPool.
+        The winning strategy is evolved (fitness updated) based on review score.
+        """
         import concurrent.futures
         self._notify_progress("moa_consensus_start", {"candidates": num_candidates})
 
         def _run_proposal(agent_id: int):
+            # Select strategy per candidate
+            strategy = self._strategy_pool.select(prompt)
             agent = AutonomousAgent(
                 project_root=self.workspace_root,
                 provider=self.provider,
@@ -342,7 +370,7 @@ class AgentOrchestrator:
             res = agent.run(f"[PROPOSAL #{agent_id+1}] {prompt}")
             diff_text = agent.tool_registry.patch_tools.history[-1].diff if agent.tool_registry.patch_tools.history else ""
             review = self.reviewer.review_diff(diff_text)
-            return agent_id, res, review
+            return agent_id, res, review, strategy
 
         proposals = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_candidates) as executor:
@@ -351,11 +379,14 @@ class AgentOrchestrator:
                 try:
                     proposals.append(f.result())
                 except Exception as exc:
-                    import logging
-                    logging.getLogger(__name__).warning("MoA proposal execution failed: %s", exc)
+                    logger.warning("MoA proposal execution failed: %s", exc)
 
         if proposals:
-            best_id, best_res, best_review = max(proposals, key=lambda p: p[2].score)
+            best_id, best_res, best_review, best_strategy = max(
+                proposals, key=lambda p: p[2].score
+            )
+            # Sütun 2: Evolve the winning strategy
+            self._strategy_pool.evolve(best_strategy, score=float(best_review.score), prompt=prompt)
             self._notify_progress("moa_judge_selected", {"best_id": best_id+1, "score": best_review.score})
             return OrchestratedExecutionResult(
                 prompt=prompt,

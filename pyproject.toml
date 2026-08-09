@@ -25,6 +25,9 @@ dev = [
 rag = [
     "sentence-transformers>=2.2.0",
 ]
+graph = [
+    "networkx>=3.3",
+]
 
 [project.scripts]
 vibe-studio = "vibe_studio.__main__:main"

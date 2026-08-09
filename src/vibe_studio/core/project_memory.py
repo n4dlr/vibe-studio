@@ -8,12 +8,15 @@ Tables:
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generator
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -120,21 +123,7 @@ class ProjectMemory:
     # Task history
     # ------------------------------------------------------------------
 
-    def remember_task(
-        self,
-        prompt: str,
-        status: str = "completed",
-        files_changed: list[str] | None = None,
-        summary: str = "",
-        error: str = "",
-    ) -> int:
-        with self._conn() as conn:
-            cur = conn.execute(
-                "INSERT INTO tasks (prompt, status, files_changed, summary, error, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (prompt, status, json.dumps(files_changed or []), summary, error, time.time()),
-            )
-            return cur.lastrowid or 0
+    # remember_task is defined at the bottom of the class with GlobalMemory integration (Sütun 7)
 
     def recall_similar(self, prompt: str, limit: int = 3) -> list[TaskRecord]:
         words = [w.lower() for w in prompt.split() if len(w) > 3]
@@ -262,16 +251,66 @@ class ProjectMemory:
         )
 
     def build_context_hint(self, prompt: str) -> str:
-        """Generate a memory hint string for injection into agent system prompt."""
+        """Generate a memory hint string for injection into agent system prompt.
+
+        Combines project-local similar tasks with cross-project global patterns (Sütun 7).
+        """
         similar = self.recall_similar(prompt, limit=3)
-        if not similar:
-            return ""
-        lines = ["PAST EXPERIENCE (similar tasks from project history):"]
-        for t in similar:
-            status_icon = "✓" if t.status == "completed" else "✗"
-            lines.append(f"  {status_icon} [{t.status}] {t.prompt[:100]}")
-            if t.summary:
-                lines.append(f"     → {t.summary[:120]}")
-            if t.error:
-                lines.append(f"     ⚠ Error was: {t.error[:80]}")
+        lines: list[str] = []
+        if similar:
+            lines.append("PAST EXPERIENCE (similar tasks from project history):")
+            for t in similar:
+                status_icon = "✓" if t.status == "completed" else "✗"
+                lines.append(f"  {status_icon} [{t.status}] {t.prompt[:100]}")
+                if t.summary:
+                    lines.append(f"     → {t.summary[:120]}")
+                if t.error:
+                    lines.append(f"     ⚠ Error was: {t.error[:80]}")
+
+        # Sütun 7: append cross-project global patterns
+        try:
+            from vibe_studio.core.global_memory import GlobalMemory
+            gm = GlobalMemory()
+            global_hint = gm.build_global_hint(prompt)
+            if global_hint:
+                lines.append("")
+                lines.append(global_hint)
+        except Exception as exc:
+            logger.debug("GlobalMemory hint skipped: %s", exc)
+
         return "\n".join(lines)
+
+    def remember_task(
+        self,
+        prompt: str,
+        status: str = "completed",
+        files_changed: list[str] | None = None,
+        summary: str = "",
+        error: str = "",
+    ) -> int:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO tasks (prompt, status, files_changed, summary, error, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (prompt, status, json.dumps(files_changed or []), summary, error, time.time()),
+            )
+            task_id = cur.lastrowid or 0
+
+        # Sütun 7: record successful patterns to global memory
+        if status == "completed" and summary:
+            try:
+                from vibe_studio.core.global_memory import GlobalMemory
+                gm = GlobalMemory()
+                # Infer a generic keyword from the first 3 meaningful words of prompt
+                words = [w.lower() for w in prompt.split() if len(w) >= 3][:3]
+                keyword = " ".join(words) if words else prompt[:30].lower()
+                gm.record_pattern(
+                    framework="",
+                    pattern_type="task",
+                    keyword=keyword,
+                    solution=summary[:300],
+                )
+            except Exception as exc:
+                logger.debug("GlobalMemory record skipped: %s", exc)
+
+        return task_id

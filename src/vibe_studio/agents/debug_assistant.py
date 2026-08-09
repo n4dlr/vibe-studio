@@ -11,10 +11,13 @@ Produces ranked suggestions based on error type and workspace proximity.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class ErrorRuntime(str, Enum):
@@ -37,6 +40,7 @@ class DebugAnalysis:
     runtime: ErrorRuntime = ErrorRuntime.UNKNOWN
     confidence: float = 0.0      # 0.0–1.0
     additional_frames: list[dict[str, str]] = field(default_factory=list)
+    data_flow_hint: str = ""     # Root cause data-flow trace (Sütun 3)
 
     def format_report(self) -> str:
         lines = [
@@ -50,6 +54,8 @@ class DebugAnalysis:
             for frame in self.additional_frames[-5:]:
                 lines.append(f"  {frame.get('file', '')}:{frame.get('line', '')} in {frame.get('func', '')}")
         lines.append(f"Confidence: {self.confidence:.0%}")
+        if self.data_flow_hint:
+            lines.append(f"Root Cause: {self.data_flow_hint}")
         lines.append("Suggestions:")
         for i, s in enumerate(self.suggestions, 1):
             lines.append(f"  {i}. {s}")
@@ -177,11 +183,29 @@ def _extract_python_frames(text: str) -> list[dict[str, str]]:
 class DebugAssistant:
     """Analyzes runtime exceptions and stack traces across multiple languages."""
 
-    def analyze_traceback(self, traceback_text: str) -> DebugAnalysis:
-        """Parse a traceback/error output and return a structured DebugAnalysis."""
+    def __init__(self) -> None:
+        # Lazy-import to avoid circular deps at module level
+        try:
+            from vibe_studio.agents.root_cause_analyzer import RootCauseAnalyzer
+            self._rca: object = RootCauseAnalyzer()
+        except Exception:
+            self._rca = None
+
+    def analyze_traceback(
+        self,
+        traceback_text: str,
+        source_code: str = "",
+    ) -> DebugAnalysis:
+        """Parse a traceback/error output and return a structured DebugAnalysis.
+
+        Args:
+            traceback_text: Raw exception / traceback string.
+            source_code   : Optional source of the failing file for data-flow analysis.
+        """
         text = traceback_text.strip()
 
         # Try language-specific parsers in priority order
+        result: DebugAnalysis | None = None
         for parser in [
             self._parse_pytest,
             self._parse_javascript,
@@ -192,18 +216,34 @@ class DebugAssistant:
         ]:
             result = parser(text)
             if result is not None:
-                return result
+                break
 
-        # Unknown — best-effort
-        return DebugAnalysis(
-            error_type="UnknownError",
-            error_message=text[:200],
-            file_path="",
-            line_number=0,
-            suggestions=_DEFAULT_SUGGESTIONS,
-            runtime=ErrorRuntime.UNKNOWN,
-            confidence=0.1,
-        )
+        if result is None:
+            result = DebugAnalysis(
+                error_type="UnknownError",
+                error_message=text[:200],
+                file_path="",
+                line_number=0,
+                suggestions=_DEFAULT_SUGGESTIONS,
+                runtime=ErrorRuntime.UNKNOWN,
+                confidence=0.1,
+            )
+
+        # Sütun 3: Enrich with Root Cause data-flow trace
+        if self._rca is not None and result.file_path:
+            try:
+                trace = self._rca.analyze(  # type: ignore[union-attr]
+                    traceback_text=text,
+                    source_code=source_code,
+                    file_path=result.file_path,
+                )
+                if trace:
+                    result.data_flow_hint = trace.prompt_hint
+                    logger.debug("RCA hint: %s", result.data_flow_hint)
+            except Exception as exc:
+                logger.debug("RCA skipped: %s", exc)
+
+        return result
 
     def analyze_test_output(self, output: str) -> list[DebugAnalysis]:
         """Analyze combined test runner output containing multiple failures.

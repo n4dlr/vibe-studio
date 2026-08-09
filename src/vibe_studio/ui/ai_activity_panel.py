@@ -129,8 +129,14 @@ class AIActivityPanel(QWidget):
             )[:120]
             thought = data.get("thought", "")[:100]
             thought_html = f" <i style='color:#64748b;'>{thought}</i>" if thought else ""
+            # Sütun 6: Explainable AI — show REASON: if provided
+            reason = data.get("reason", "")[:150]
+            reason_html = (
+                f"<br><span style='color:#fbbf24; font-size:10px;'>💡 <i>Reason: {reason}</i></span>"
+                if reason else ""
+            )
             self._append(
-                f"<span style='color:#818cf8;'>⚡ <b>{tool}</b>({arg_str}){thought_html}</span>"
+                f"<span style='color:#818cf8;'>⚡ <b>{tool}</b>({arg_str}){thought_html}{reason_html}</span>"
             )
 
         elif event_type == "tool_finished":

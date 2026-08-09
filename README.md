@@ -301,6 +301,21 @@ pytest tests/test_integration.py  # will use running Ollama if available
 - **Large-Project Context Engine**: Import-graph dependency ranking and token-budgeted scoring select relevant files accurately for projects with 1000+ files.
 - **Offline & Model Fallback**: Graceful fallback to deterministic rule-based execution when Ollama or remote LLM APIs are offline.
 
+---
+
+## 🚀 Vibe Studio 2.0 Architecture
+
+Vibe Studio 2.0 implements 7 fundamental architectural pillars for enterprise-grade autonomous coding:
+
+1. **Graph RAG (`src/vibe_studio/context/graph_rag.py`)**: AST call and inheritance graph (`networkx.DiGraph`) expanding structural context beyond plain vector text matching.
+2. **Evolutionary Agent (`src/vibe_studio/agents/evolutionary_strategy.py`)**: Population-based strategy pool using roulette-wheel selection and task-specific fitness evolution.
+3. **Root Cause Analysis (`src/vibe_studio/agents/root_cause_analyzer.py`)**: AST data-flow assignment tracing + `ErrorFingerprint` to break self-healing loops.
+4. **Plugin Subprocess Sandbox (`src/vibe_studio/plugin/plugin_worker.py`)**: JSON-RPC subprocess isolation for `HIGH`-risk plugin tools with workspace path enforcement.
+5. **Adaptive Turbo Mode (`src/vibe_studio/agents/complexity_classifier.py`)**: 3-tier task routing (`FAST` sub-second, `NORMAL` standard, `DEEP` full Graph RAG + MoA).
+6. **Explainable AI (`src/vibe_studio/ui/ai_activity_panel.py`)**: `REASON:` prefix parsing rendering visual yellow `💡 Reason:` badges on activity cards.
+7. **Multi-Project Global Memory (`src/vibe_studio/core/global_memory.py`)**: SQLite pattern store (`~/.vibe_studio/global_memory.db`) sharing solution patterns across projects.
+
+
 ## ⚠️ Disclaimer & Security
 
 ### User Responsibility
