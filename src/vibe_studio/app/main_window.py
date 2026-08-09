@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Vibe Studio — AI Desktop IDE")
         self.resize(1600, 980)
+        self.showMaximized()  # start maximized — no cramped pixels
         apply_theme(self, dark=settings.dark_theme)
 
         self._setup_menu()
@@ -198,16 +199,20 @@ class MainWindow(QMainWindow):
         mb.addAction("⚙ Settings", self.show_settings)
 
 
-    # ------------------------------------------------------------------
-    # Central Layout
-    # ------------------------------------------------------------------
-
     def _setup_central_layout(self) -> None:
         root_widget = QWidget(self)
         self.setCentralWidget(root_widget)
         root_layout = QVBoxLayout(root_widget)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
+
+        # ── Main container row: [Activity Bar] + [Main Splitter] ──────
+        main_container = QWidget()
+        main_row = QHBoxLayout(main_container)
+        main_row.setContentsMargins(0, 0, 0, 0)
+        main_row.setSpacing(0)
+
+        self._build_activity_bar(main_row)
 
         # ── Vertical splitter: [main area] / [bottom panels] ──────────
         self._v_splitter = QSplitter(Qt.Vertical)
@@ -221,13 +226,67 @@ class MainWindow(QMainWindow):
         self._build_editor_area()
         self._build_right_panel()
 
-        self._h_splitter.setSizes([240, 860, 460])
+        self._h_splitter.setSizes([220, 900, 500])
         self._v_splitter.addWidget(self._h_splitter)
 
         self._build_bottom_panel()
-        self._v_splitter.setSizes([740, 240])
+        self._v_splitter.setSizes([800, 200])
 
-        root_layout.addWidget(self._v_splitter)
+        main_row.addWidget(self._v_splitter, 1)
+        root_layout.addWidget(main_container)
+
+
+    def _build_activity_bar(self, parent_layout: QHBoxLayout) -> None:
+        """Create vertical VS Code / Cursor style Activity Bar on the far left."""
+        act_bar = QWidget()
+        act_bar.setFixedWidth(44)
+        act_bar.setStyleSheet(
+            "QWidget { background: #13141c; border-right: 1px solid #28293d; }"
+            "QPushButton { background: transparent; color: #8da1b4; border: none; border-radius: 6px; margin: 3px 4px; font-size: 16px; }"
+            "QPushButton:hover { background: #242536; color: #f8fafc; }"
+            "QPushButton:checked { background: #242536; color: #818cf8; border-left: 2px solid #6366f1; }"
+        )
+        vbox = QVBoxLayout(act_bar)
+        vbox.setContentsMargins(0, 8, 0, 8)
+        vbox.setSpacing(8)
+
+        self._btn_explorer = QPushButton("📁")
+        self._btn_explorer.setToolTip("Explorer (Ctrl+Shift+E)")
+        self._btn_explorer.setCheckable(True)
+        self._btn_explorer.setChecked(True)
+        self._btn_explorer.clicked.connect(lambda: self._switch_left_tab(0))
+
+        self._btn_search = QPushButton("🔍")
+        self._btn_search.setToolTip("Search (Ctrl+Shift+F)")
+        self._btn_search.setCheckable(True)
+        self._btn_search.clicked.connect(lambda: self._switch_left_tab(1))
+
+        self._btn_git = QPushButton("⎇")
+        self._btn_git.setToolTip("Source Control (Ctrl+Shift+G)")
+        self._btn_git.setCheckable(True)
+        self._btn_git.clicked.connect(lambda: self._switch_left_tab(2))
+
+        vbox.addWidget(self._btn_explorer)
+        vbox.addWidget(self._btn_search)
+        vbox.addWidget(self._btn_git)
+        vbox.addStretch()
+
+        self._btn_settings = QPushButton("⚙️")
+        self._btn_settings.setToolTip("Settings")
+        self._btn_settings.clicked.connect(self.show_settings)
+        vbox.addWidget(self._btn_settings)
+
+        parent_layout.addWidget(act_bar)
+
+    def _switch_left_tab(self, index: int) -> None:
+        btns = [self._btn_explorer, self._btn_search, self._btn_git]
+        for i, b in enumerate(btns):
+            b.setChecked(i == index)
+        if self._left_tabs.currentIndex() == index and self._left_tabs.isVisible():
+            self._left_tabs.setVisible(False)
+        else:
+            self._left_tabs.setVisible(True)
+            self._left_tabs.setCurrentIndex(index)
 
     # ── Left sidebar ───────────────────────────────────────────────────
     def _build_left_sidebar(self) -> None:
@@ -266,14 +325,36 @@ class MainWindow(QMainWindow):
         center = QWidget()
         cl = QVBoxLayout(center)
         cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+
+        # Breadcrumb Bar
+        self.breadcrumb_label = QLabel("  vibe-stuudio")
+        self.breadcrumb_label.setFixedHeight(26)
+        self.breadcrumb_label.setStyleSheet(
+            "QLabel { background: #1c1d2a; color: #9ca3af; padding: 2px 12px; font-family: system-ui, -apple-system, sans-serif; font-size: 11px; border-bottom: 1px solid #28293d; }"
+        )
+        cl.addWidget(self.breadcrumb_label)
 
         self.editor_tabs = QTabWidget()
         self.editor_tabs.setTabsClosable(True)
         self.editor_tabs.setDocumentMode(True)
         self.editor_tabs.setMovable(True)
         self.editor_tabs.tabCloseRequested.connect(self.close_editor_tab)
+        self.editor_tabs.currentChanged.connect(self._on_editor_tab_changed)
         cl.addWidget(self.editor_tabs)
         self._h_splitter.addWidget(center)
+
+    def _on_editor_tab_changed(self, index: int) -> None:
+        if index < 0:
+            self.breadcrumb_label.setText("  vibe-stuudio")
+            return
+        w = self.editor_tabs.widget(index)
+        if isinstance(w, EditorWidget) and getattr(w, "path", None):
+            p = Path(w.path)
+            parts = p.parts[-4:]
+            icon = "🐍 " if p.suffix == ".py" else "🦀 " if p.suffix == ".rs" else "📝 " if p.suffix == ".md" else "⚙️ " if p.suffix in (".json", ".toml") else "📄 "
+            breadcrumb = "  " + "  ›  ".join(parts[:-1]) + f"  ›  {icon}<b>{parts[-1]}</b>" if len(parts) > 1 else f"  {icon}<b>{p.name}</b>"
+            self.breadcrumb_label.setText(breadcrumb)
 
     # ── Right AI panel ─────────────────────────────────────────────────
     def _build_right_panel(self) -> None:
@@ -301,11 +382,18 @@ class MainWindow(QMainWindow):
 
         # AI tabs — Chat / Activity
         self._ai_tabs = QTabWidget()
+        self._ai_tabs.setStyleSheet(
+            "QTabWidget::pane { border: 1px solid #28293d; background: #181924; border-radius: 8px; }"
+            "QTabBar::tab { background: #1c1d2a; color: #9ca3af; padding: 8px 16px; font-weight: bold; font-size: 12px; margin-right: 2px; border-top-left-radius: 6px; border-top-right-radius: 6px; border: 1px solid #28293d; border-bottom: none; }"
+            "QTabBar::tab:selected { background: #242536; color: #818cf8; border-bottom: 2px solid #6366f1; }"
+        )
 
         self.chat = QTextEdit()
         self.chat.setReadOnly(True)
-        self.chat.setPlaceholderText("AI responses appear here…")
-        self.chat.setFont(QFont("monospace", 11))
+        self.chat.setPlaceholderText("AI responses and conversation appear here…")
+        self.chat.setStyleSheet(
+            "QTextEdit { background-color: #181924; color: #e2e4ed; border: 1px solid #28293d; border-radius: 8px; padding: 12px; font-family: system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 1.5; }"
+        )
 
         self.activity_panel = AIActivityPanel()
         self.changes_panel = _ChangesPanel()
@@ -314,46 +402,59 @@ class MainWindow(QMainWindow):
         self._ai_tabs.addTab(self.changes_panel, "📝 Changes")
         rl.addWidget(self._ai_tabs, 1)
 
-        # Prompt input
+        # Prompt input — auto-resizing like Claude/Telegram
         self.chat_input = QTextEdit()
         self.chat_input.setPlaceholderText(
-            "Ask Vibe Studio…\n  e.g. 'Login page-in backgroundunu dəyiş'\n  Ctrl+Enter to send"
+            "Ask Vibe Studio…    (Ctrl+Enter to send)"
         )
-        self.chat_input.setFixedHeight(100)
-        self.chat_input.setFont(QFont("monospace", 11))
+        self.chat_input.setMinimumHeight(44)
+        self.chat_input.setMaximumHeight(220)
+        from PySide6.QtWidgets import QSizePolicy as _SP
+        pol = self.chat_input.sizePolicy()
+        pol.setVerticalPolicy(_SP.Policy.Expanding)
+        self.chat_input.setSizePolicy(pol)
+        self.chat_input.setStyleSheet(
+            "QTextEdit { background-color: #242536; color: #f8fafc; border: 1px solid #28293d; border-radius: 12px; padding: 10px 14px; font-family: system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 1.5; }"
+            "QTextEdit:focus { border: 1px solid #6366f1; }"
+        )
         self.chat_input.keyPressEvent = self._chat_key_press
+        self.chat_input.document().contentsChanged.connect(self._adjust_input_height)
         rl.addWidget(self.chat_input)
 
         # Action buttons
         btn_row = QHBoxLayout()
         self.send_btn = QPushButton("▶  Send Task")
         self.send_btn.setStyleSheet(
-            "QPushButton{background:#3b82f6;color:white;border:none;border-radius:6px;"
-            "padding:8px 14px;font-weight:bold;}"
-            "QPushButton:hover{background:#2563eb;}"
-            "QPushButton:disabled{background:#1e2d40;color:#4e6178;}"
+            "QPushButton { background: #6366f1; color: white; border: none; border-radius: 6px; padding: 8px 16px; font-weight: bold; font-size: 12px; }"
+            "QPushButton:hover { background: #4f46e5; }"
+            "QPushButton:disabled { background: #242536; color: #6b7280; }"
         )
         self.send_btn.clicked.connect(self._send_chat_message)
 
         self.stop_btn = QPushButton("⏹  Stop")
         self.stop_btn.setStyleSheet(
-            "QPushButton{background:#ef4444;color:white;border:none;border-radius:6px;"
-            "padding:8px 12px;font-weight:bold;}"
-            "QPushButton:hover{background:#dc2626;}"
+            "QPushButton { background: #f43f5e; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-weight: bold; font-size: 12px; }"
+            "QPushButton:hover { background: #e11d48; }"
         )
         self.stop_btn.clicked.connect(self._stop_agent)
 
         self.undo_btn = QPushButton("↩  Undo")
+        self.undo_btn.setStyleSheet(
+            "QPushButton { background: #242536; color: #e2e4ed; border: 1px solid #383a54; border-radius: 6px; padding: 8px 12px; font-weight: bold; font-size: 12px; }"
+            "QPushButton:hover { background: #2d2e42; }"
+        )
         self.undo_btn.clicked.connect(self._undo_last_change)
 
         self.clear_chat_btn = QPushButton("🗑️")
         self.clear_chat_btn.setToolTip("Clear Chat History")
-        self.clear_chat_btn.setFixedSize(28, 26)
+        self.clear_chat_btn.setFixedSize(30, 30)
+        self.clear_chat_btn.setStyleSheet("QPushButton { background: #242536; color: #9ca3af; border: 1px solid #28293d; border-radius: 6px; font-size: 13px; } QPushButton:hover { background: #2d2e42; color: #f8fafc; }")
         self.clear_chat_btn.clicked.connect(self._clear_chat_history)
 
         self.export_chat_btn = QPushButton("📥")
         self.export_chat_btn.setToolTip("Export Chat History to Markdown")
-        self.export_chat_btn.setFixedSize(28, 26)
+        self.export_chat_btn.setFixedSize(30, 30)
+        self.export_chat_btn.setStyleSheet("QPushButton { background: #242536; color: #9ca3af; border: 1px solid #28293d; border-radius: 6px; font-size: 13px; } QPushButton:hover { background: #2d2e42; color: #f8fafc; }")
         self.export_chat_btn.clicked.connect(self._export_chat_history)
 
         btn_row.addWidget(self.send_btn, 2)
@@ -478,11 +579,20 @@ class MainWindow(QMainWindow):
     # Chat / Agent
     # ------------------------------------------------------------------
 
+    def _adjust_input_height(self) -> None:
+        """Auto-grow the chat input box based on its text content (min 44, max 220px)."""
+        doc_h = int(self.chat_input.document().size().height())
+        padding = 20
+        new_h = max(44, min(doc_h + padding, 220))
+        if self.chat_input.height() != new_h:
+            self.chat_input.setFixedHeight(new_h)
+
     def _chat_key_press(self, event: QKeyEvent) -> None:
         if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Return:
             self._send_chat_message()
             return
         QTextEdit.keyPressEvent(self.chat_input, event)
+        self._adjust_input_height()
 
     def _send_chat_message(self) -> None:
         text = self.chat_input.toPlainText().strip()
@@ -510,7 +620,7 @@ class MainWindow(QMainWindow):
             self._agent_thread = None
             self._agent_worker = None
 
-        self.chat.append(f"<b style='color:#60a5fa;'>You:</b> {prompt[:200]}{'…' if len(prompt) > 200 else ''}\n")
+        self._append_chat_message("user", prompt)
         self.chat_input.clear()
 
         mode_str = self.mode_combo.currentText()
@@ -652,11 +762,19 @@ class MainWindow(QMainWindow):
     def _on_stream_chunk(self, chunk: str) -> None:
         """Append streaming text incrementally to chat."""
         if not self._streaming_response:
-            self.chat.append("<b style='color:#4ade80;'>AI:</b> ")
+            header_card = (
+                "<div style='margin:10px 16px 10px 0; background:#1a1b28; border:1px solid #28293d; "
+                "border-radius:10px; padding:12px 14px; color:#e2e4ed; font-size:13px; "
+                "font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; line-height:1.5;'>"
+                "<div style='font-weight:bold; color:#34d399; margin-bottom:6px; font-size:12px;'>🤖 Vibe AI</div>"
+                "<div>"
+            )
+            self.chat.append(header_card)
             self._streaming_response = True
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertText(chunk)
+        import html
+        cursor.insertHtml(html.escape(chunk).replace("\n", "<br>"))
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
 
@@ -698,20 +816,104 @@ class MainWindow(QMainWindow):
 
         full_response = response + diff_stats
 
-        if not self._streaming_response:
-            self.chat.append(f"<b style='color:#4ade80;'>AI:</b> {full_response}\n")
-        else:
+        if self._streaming_response:
+            cursor = self.chat.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertHtml("</div></div><br>")
+            self.chat.setTextCursor(cursor)
+            self.chat.ensureCursorVisible()
             if diff_stats:
-                self.chat.append(diff_stats)
-            self.chat.append("\n")
+                self._append_chat_message("system", diff_stats)
             self._streaming_response = False
+        else:
+            self._append_chat_message("ai", full_response)
+
         self.send_btn.setEnabled(True)
         self.send_btn.setText("▶  Send Task")
         self._status_state_label.setText("Agent: Idle")
         self._set_status("Agent task completed.")
-        # Refresh file tree, git panel, and changes tab after agent work
         self.refresh_git_status()
         self._refresh_changes_panel()
+
+    def _append_chat_message(self, role: str, content: str) -> None:
+        """Format and append a chat message card into the chat view."""
+        formatted = self._format_chat_markdown(content)
+        if role == "user":
+            card = (
+                f"<div style='margin:6px 0; background:#20212e; "
+                f"border-left:3px solid #818cf8; border-radius:0 8px 8px 0; "
+                f"padding:10px 14px; color:#f1f5f9; font-size:13px; "
+                f"font-family:-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; line-height:1.6;'>"
+                f"<div style='font-weight:600; color:#818cf8; margin-bottom:5px; font-size:11px; letter-spacing:0.05em;'>"
+                f"👤 YOU</div>"
+                f"<div>{formatted}</div>"
+                f"</div><br>"
+            )
+        elif role == "ai":
+            card = (
+                f"<div style='margin:6px 0; background:#1a1b28; "
+                f"border-left:3px solid #34d399; border-radius:0 8px 8px 0; "
+                f"padding:10px 14px; color:#e2e4ed; font-size:13px; "
+                f"font-family:-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; line-height:1.6;'>"
+                f"<div style='font-weight:600; color:#34d399; margin-bottom:5px; font-size:11px; letter-spacing:0.05em;'>"
+                f"🤖 VIBE AI</div>"
+                f"<div>{formatted}</div>"
+                f"</div><br>"
+            )
+        else:  # system
+            card = (
+                f"<div style='margin:4px 0; padding:4px 10px; "
+                f"color:#9ca3af; font-size:11px; font-style:italic; "
+                f"font-family:sans-serif; border-left:2px solid #383a54;'>"
+                f"{formatted}</div><br>"
+            )
+        self.chat.append(card)
+        cursor = self.chat.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.chat.setTextCursor(cursor)
+        self.chat.ensureCursorVisible()
+
+    def _format_chat_markdown(self, text: str) -> str:
+        """Format markdown text into rich HTML for Qt QTextEdit rendering."""
+        if not text:
+            return ""
+        import html
+        import re
+        safe = html.escape(text)
+
+        # 1. Code blocks: ```python ... ``` -> dark pre code card
+        def _block_cb(m):
+            code = m.group(1).strip()
+            return (
+                f"<div style='background:#12131c; border:1px solid #28293d; border-radius:8px; "
+                f"padding:10px 14px; margin:8px 0; font-family:Consolas, Monaco, monospace; font-size:12px; color:#e2e4ed; white-space:pre-wrap; line-height:1.4;'>"
+                f"{code}</div>"
+            )
+        safe = re.sub(r'```(?:[a-zA-Z0-9_\-\+]+)?\n?(.*?)```', _block_cb, safe, flags=re.DOTALL)
+
+        # 2. Inline code: `code`
+        safe = re.sub(
+            r'`([^`]+)`',
+            r"<code style='background:#242536; color:#818cf8; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:12px;'>\1</code>",
+            safe,
+        )
+
+        # 3. Bold text: **text**
+        safe = re.sub(r'\*\*(.*?)\*\*', r"<strong style='color:#f8fafc;'>\1</strong>", safe)
+
+        # 4. Headers: ### Header
+        safe = re.sub(r'^### (.*?)$', r"<h4 style='color:#818cf8; margin:10px 0 4px 0; font-size:14px;'>\1</h4>", safe, flags=re.MULTILINE)
+        safe = re.sub(r'^## (.*?)$', r"<h3 style='color:#818cf8; margin:12px 0 6px 0; font-size:15px;'>\1</h3>", safe, flags=re.MULTILINE)
+        safe = re.sub(r'^# (.*?)$', r"<h2 style='color:#818cf8; margin:14px 0 8px 0; font-size:16px;'>\1</h2>", safe, flags=re.MULTILINE)
+
+        # 5. Bullet items: - item
+        safe = re.sub(r'^\s*[\-\*]\s+(.*?)$', r"• \1<br>", safe, flags=re.MULTILINE)
+
+        # 6. Line breaks
+        safe = safe.replace("\n\n", "<br><br>")
+        safe = safe.replace("\n", "<br>")
+
+        return safe
 
     def _handle_agent_error(self, error: str) -> None:
         self.chat.append(f"<b style='color:#f87171;'>Error:</b> {error}\n")
@@ -929,10 +1131,7 @@ class MainWindow(QMainWindow):
         for msg in history:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            if role == "user":
-                self.chat.append(f"<b style='color:#60a5fa;'>You:</b> {content}\n")
-            else:
-                self.chat.append(f"<b style='color:#4ade80;'>AI:</b> {content}\n")
+            self._append_chat_message(role, content)
         self._set_status(f"Loaded {len(history)} messages from chat history.")
 
     def _clear_chat_history(self) -> None:
@@ -947,7 +1146,7 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self.chat_service.clear_history(self.settings.project_path)
             self.chat.clear()
-            self.chat.append("<b style='color:#94a3b8;'>System: Chat history cleared.</b>\n")
+            self._append_chat_message("system", "Chat history cleared.")
             self._set_status("Chat history cleared.")
 
     def _export_chat_history(self) -> None:
@@ -957,7 +1156,7 @@ class MainWindow(QMainWindow):
         if file_path:
             self.chat_service.export_history_markdown(file_path)
             self._set_status(f"Exported chat history to {file_path}")
-            self.chat.append(f"<b style='color:#38bdf8;'>System:</b> Exported chat history to {file_path}\n")
+            self._append_chat_message("system", f"Exported chat history to {file_path}")
 
     def open_file(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(self, "Open File")

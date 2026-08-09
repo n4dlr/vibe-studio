@@ -3,24 +3,24 @@ from __future__ import annotations
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
-# ── Dark colour tokens ────────────────────────────────────────────────────────
-_BG_DEEP    = "#080d12"
-_BG_BASE    = "#0b1016"
-_BG_PANEL   = "#101821"
-_BG_RAISED  = "#161e2b"
-_BG_HOVER   = "#1c2636"
-_BG_SELECTED = "#1e3a5f"
+# ── Soft Charcoal / Slate Dark Tokens (Eye-Care Premium Dark) ────────────────
+_BG_DEEP     = "#13141c"  # Main Window Background
+_BG_BASE     = "#181924"  # Editor & Main Content Area
+_BG_PANEL    = "#1c1d2a"  # Sidebar, Bottom Panel, MenuBar
+_BG_RAISED   = "#242536"  # Input Boxes, Cards, Dropdowns
+_BG_HOVER    = "#2d2e42"  # Hover state
+_BG_SELECTED = "#383a54"  # Active selection highlight
 
-_BORDER     = "#1e2d40"
-_BORDER_FOC = "#3b82f6"
+_BORDER      = "#28293d"  # Soft low-contrast border (no eye strain)
+_BORDER_FOC  = "#6366f1"  # Soft Indigo focus ring
 
-_TEXT       = "#e6edf7"
-_TEXT_DIM   = "#8da1b4"
-_TEXT_MUTED = "#4e6178"
+_TEXT        = "#e2e4ed"  # Soft warm silver text
+_TEXT_DIM    = "#9ca3af"  # Muted slate text
+_TEXT_MUTED  = "#6b7280"  # Soft labels
 
-_ACCENT     = "#3b82f6"
-_ACCENT_HOV = "#2563eb"
-_DANGER     = "#ef4444"
+_ACCENT      = "#6366f1"  # Modern Indigo / Violet
+_ACCENT_HOV  = "#4f46e5"  # Hover Indigo
+_DANGER      = "#f43f5e"  # Rose Red
 
 # ── Full dark stylesheet ──────────────────────────────────────────────────────
 DARK_QSS = f"""

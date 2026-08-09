@@ -25,7 +25,7 @@ def test_main_window_sends_chat_message(tmp_path) -> None:
     window._send_chat_message()
     result = window.chat.toPlainText()
     assert "hello from test" in result
-    assert "AI:" in result or "You:" in result
+    assert "YOU" in result or "AI" in result or "You" in result
 
 
 def test_open_project_builds_file_tree_and_opens_file(tmp_path) -> None:
