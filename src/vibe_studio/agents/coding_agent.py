@@ -32,6 +32,7 @@ from vibe_studio.agents.output_processor import (
     extract_errors,
     truncate_output,
 )
+from vibe_studio.agents.stuck_detector import StuckAgentDetector
 from vibe_studio.agents.tool_call_parser import (
     ParsedToolCall,
     parse_tool_calls,
@@ -43,6 +44,7 @@ from vibe_studio.core.cancellation import CancellationToken
 from vibe_studio.core.checkpoint_system import CheckpointSystem, StateTransitionValidator
 from vibe_studio.core.project_memory import ProjectMemory
 from vibe_studio.core.resource_manager import default_resource_manager
+from vibe_studio.diff.diff_proposal import DiffProposalManager
 from vibe_studio.project.project_scanner import ProjectScanner
 from vibe_studio.providers.base import ProviderError
 from vibe_studio.providers.capability_detector import (
@@ -50,6 +52,7 @@ from vibe_studio.providers.capability_detector import (
     adapt_context_to_model,
     detect_capabilities,
 )
+from vibe_studio.security.permission_broker import PermissionBroker
 from vibe_studio.security.sensitive_file_detector import SensitiveFileDetector
 from vibe_studio.tools.tool_registry import ToolRegistry, default_tool_registry
 
@@ -125,9 +128,11 @@ class AutonomousAgent:
     Production autonomous AI agent hardened with:
       - CancellationToken & execution_id tracking
       - CheckpointSystem & StateTransitionValidator
-      - ResourceManager process group cleanup
-      - Multi-format tool call parsing with strict JSON isolation
+      - StuckAgentDetector & PermissionBroker
+      - DiffProposalManager & process tree cleanup
     """
+
+    MAX_EXECUTION_TIME_SECONDS = 300.0
 
     def __init__(
         self,
@@ -157,6 +162,9 @@ class AutonomousAgent:
         self.scanner = ProjectScanner(self.project_root)
         self.memory = ProjectMemory(self.project_root)
         self.checkpoint_system = CheckpointSystem(self.project_root)
+        self.permission_broker = PermissionBroker(self.project_root)
+        self.stuck_detector = StuckAgentDetector()
+        self.diff_proposal_manager = DiffProposalManager(self.project_root)
 
         self.state = AgentState.IDLE
         self._cancel_requested = False
@@ -433,36 +441,21 @@ class AutonomousAgent:
                         f"{recent_calls.count(call_sig)} times. Choose a different approach."
                     )
                     continue
-                recent_calls.append(call_sig)
-                if len(recent_calls) > 12:
-                    recent_calls.pop(0)
+                # Record step in stuck detector & check stuck condition
+                self.stuck_detector.record_step(call.tool, call.args, status="started")
+                if self.stuck_detector.is_stuck():
+                    hint = self.stuck_detector.get_recovery_hint()
+                    current_prompt += f"\n{hint}\n"
+                    self._emit("stuck_detected", {"tool": call.tool, "args": call.args})
 
-                # Conflict detection for read_file — record hash
-                if call.tool == "read_file" and "path" in call.args:
-                    self._record_read_hash(call.args["path"])
-
-                # Conflict detection for patch/write — check if file changed
-                if call.tool in {"patch_file", "replace_text", "write_file"} and "path" in call.args:
-                    conflict = self._check_conflict(call.args["path"])
-                    if conflict:
-                        self._emit("conflict_detected", {"path": call.args["path"]})
-                        current_prompt += (
-                            f"\n[CONFLICT] File '{call.args['path']}' was modified externally "
-                            "since it was read. Re-reading now before patching."
-                        )
-                        self._record_read_hash(call.args["path"])
-                        # Re-read the file and inject current content
-                        try:
-                            fresh = self.tool_registry.execute(
-                                "read_file",
-                                {"path": call.args["path"]},
-                                execution_id=self.execution_id,
-                                cancellation_token=self.cancellation_token,
-                            )
-                            current_prompt += f"\nFRESH CONTENT:\n{truncate_output(fresh.get('stdout', ''), 2000)}"
-                        except Exception:
-                            pass
-                        continue
+                # Permission broker check
+                perm_decision = self.permission_broker.authorize_command(
+                    call.tool,
+                    allow_destructive=(self.autonomy_mode == AutonomyMode.AUTO),
+                )
+                if perm_decision.value == "DENY":
+                    current_prompt += f"\n[PERMISSION DENIED] Action '{call.tool}' was denied by security policy.\n"
+                    continue
 
                 # Execute
                 self._set_state(AgentState.EXECUTING)
