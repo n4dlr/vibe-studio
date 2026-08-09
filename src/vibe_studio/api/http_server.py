@@ -1,4 +1,4 @@
-"""HTTP Server API — REST JSON & Web UI interface for Vibe Studio 4.0 Cosmic."""
+"""HTTP Server API — REST JSON & Web UI interface for Vibe Studio 5.0 Omniverse."""
 from __future__ import annotations
 
 import json
@@ -8,12 +8,16 @@ from pathlib import Path
 from typing import Any
 import urllib.parse
 
+from vibe_studio.agents.code_reviewer import CodeReviewerAgent
 from vibe_studio.agents.orchestrator import AgentOrchestrator
 from vibe_studio.ai.predictive_engine import PredictiveCodingEngine
 from vibe_studio.context.context_engine import ContextEngine
 from vibe_studio.context.graph_rag import CodeGraph
+from vibe_studio.context.semantic_search import SemanticCodeSearch
 from vibe_studio.core.global_memory import GlobalMemory
 from vibe_studio.plugins.marketplace import PluginMarketplace
+from vibe_studio.project.doc_generator import AutoDocGenerator
+from vibe_studio.security.security_auditor import SecurityAuditor
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +31,10 @@ class VibeAPIRequestHandler(BaseHTTPRequestHandler):
     global_memory: GlobalMemory | None = None
     predictive_engine: PredictiveCodingEngine | None = None
     marketplace: PluginMarketplace | None = None
+    searcher: SemanticCodeSearch | None = None
+    doc_gen: AutoDocGenerator | None = None
+    auditor: SecurityAuditor | None = None
+    reviewer: CodeReviewerAgent | None = None
 
     def _set_headers(self, status: int = 200, content_type: str = "application/json") -> None:
         self.send_response(status)
@@ -76,7 +84,7 @@ class VibeAPIRequestHandler(BaseHTTPRequestHandler):
             self._set_headers(200)
             res = {
                 "status": "ok",
-                "service": "Vibe Studio REST API 4.0 Cosmic",
+                "service": "Vibe Studio REST API 5.0 Omniverse",
                 "workspace": str(self.workspace_root),
             }
             self.wfile.write(json.dumps(res).encode("utf-8"))
@@ -101,11 +109,34 @@ class VibeAPIRequestHandler(BaseHTTPRequestHandler):
             self._set_headers(200)
             self.wfile.write(json.dumps({"plugins": mp.list_available()}).encode("utf-8"))
 
-        elif path == "/api/v1/plugins/search":
-            mp = self.marketplace or PluginMarketplace(self.workspace_root)
+        elif path == "/api/v1/search":
             q = query_params.get("q", [""])[0]
+            s = self.searcher or SemanticCodeSearch(self.workspace_root)
+            results = [
+                {
+                    "file_path": r.file_path,
+                    "symbol_name": r.symbol_name,
+                    "symbol_type": r.symbol_type,
+                    "score": r.score,
+                    "line_number": r.line_number,
+                    "snippet": r.snippet,
+                    "reason": r.relevance_reason,
+                }
+                for r in s.search(q, top_k=5)
+            ]
             self._set_headers(200)
-            self.wfile.write(json.dumps({"plugins": mp.search(q)}).encode("utf-8"))
+            self.wfile.write(json.dumps({"results": results}).encode("utf-8"))
+
+        elif path == "/api/v1/audit":
+            auditor = self.auditor or SecurityAuditor(self.workspace_root)
+            report = auditor.scan_workspace()
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"files_scanned": report.total_files_scanned, "has_high_risk": report.has_high_risk, "report_md": report.to_markdown()}).encode("utf-8"))
+
+        elif path == "/api/v1/doc":
+            gen = self.doc_gen or AutoDocGenerator(self.workspace_root)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"api_reference": gen.generate_api_reference(), "mermaid": gen.generate_mermaid_diagram()}).encode("utf-8"))
 
         else:
             self._set_headers(404)
@@ -136,6 +167,14 @@ class VibeAPIRequestHandler(BaseHTTPRequestHandler):
                 "stage_timings": [{"stage": t.stage_name, "duration": t.duration_seconds} for t in result.stage_timings],
             }
             self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/v1/review":
+            body = self._read_json_body()
+            diff_text = body.get("diff", "")
+            rev = self.reviewer or CodeReviewerAgent()
+            report = rev.review_diff(diff_text)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"score": report.score, "approved": report.approved, "summary": report.summary, "report_md": report.to_markdown()}).encode("utf-8"))
 
         elif path == "/api/v1/predict":
             body = self._read_json_body()
@@ -177,6 +216,10 @@ def create_api_server(
     handler.global_memory = GlobalMemory()
     handler.predictive_engine = PredictiveCodingEngine(ws)
     handler.marketplace = PluginMarketplace(ws)
+    handler.searcher = SemanticCodeSearch(ws)
+    handler.doc_gen = AutoDocGenerator(ws)
+    handler.auditor = SecurityAuditor(ws)
+    handler.reviewer = CodeReviewerAgent()
 
     server = HTTPServer((host, port), handler)
     logger.info("Vibe Studio API server initialized on http://%s:%d", host, port)

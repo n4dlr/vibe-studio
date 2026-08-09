@@ -46,6 +46,10 @@ class SwarmCoordinator:
                 del self.workers[worker_id]
                 logger.info("Worker unregistered: %s", worker_id)
 
+    def list_workers(self) -> List[Dict]:
+        with self.lock:
+            return [w.to_dict() for w in self.workers.values()]
+
     def get_idle_worker(self) -> Optional[WorkerStatus]:
         with self.lock:
             for worker in self.workers.values():
@@ -53,16 +57,59 @@ class SwarmCoordinator:
                     return worker
             return None
 
-    def list_workers(self) -> List[Dict]:
+    def get_best_worker_for_task(self, task: TaskRequest) -> Optional[WorkerStatus]:
+        """Rank available workers based on skill matching, workload, and performance rating."""
         with self.lock:
-            return [w.to_dict() for w in self.workers.values()]
+            available = [w for w in self.workers.values() if w.state != WorkerState.OFFLINE and w.active_tasks < w.max_tasks]
+            if not available:
+                return None
 
-    def submit_task(self, prompt: str, active_file: Optional[str] = None, workspace_root: Optional[str] = None) -> TaskRequest:
-        task = TaskRequest(prompt=prompt, active_file=active_file, workspace_root=workspace_root)
+            req_skills = set(task.required_skills)
+            if not req_skills:
+                # Infer skills from prompt
+                p_lower = task.prompt.lower()
+                if "test" in p_lower or "pytest" in p_lower:
+                    req_skills.add("test")
+                if "security" in p_lower or "auth" in p_lower or "audit" in p_lower:
+                    req_skills.add("security")
+                if "refactor" in p_lower or "clean" in p_lower:
+                    req_skills.add("refactor")
+                if "python" in p_lower or "py" in p_lower:
+                    req_skills.add("python")
+
+            best_worker = None
+            best_score = -1.0
+
+            for w in available:
+                w_skills = set(w.skills or w.capabilities)
+                match_count = len(req_skills.intersection(w_skills)) if req_skills else 1
+                skill_score = match_count / len(req_skills) if req_skills else 1.0
+                workload_score = 1.0 - (w.active_tasks / float(w.max_tasks))
+                total_score = (skill_score * 0.5) + (workload_score * 0.3) + (w.performance_rating * 0.2)
+
+                if total_score > best_score:
+                    best_score = total_score
+                    best_worker = w
+
+            return best_worker
+
+    def submit_task(
+        self,
+        prompt: str,
+        active_file: Optional[str] = None,
+        workspace_root: Optional[str] = None,
+        required_skills: Optional[list[str]] = None,
+    ) -> TaskRequest:
+        task = TaskRequest(
+            prompt=prompt,
+            active_file=active_file,
+            workspace_root=workspace_root,
+            required_skills=required_skills or [],
+        )
         with self.lock:
             self.tasks[task.task_id] = task
 
-        worker = self.get_idle_worker()
+        worker = self.get_best_worker_for_task(task) or self.get_idle_worker()
         if worker:
             self.dispatch_task(task.task_id, worker.worker_id)
         return task

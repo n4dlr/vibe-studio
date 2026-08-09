@@ -315,11 +315,32 @@ Vibe Studio 2.0 implements 7 fundamental architectural pillars for enterprise-gr
 6. **Explainable AI (`src/vibe_studio/ui/ai_activity_panel.py`)**: `REASON:` prefix parsing rendering visual yellow `💡 Reason:` badges on activity cards.
 ---
 
-## 🏛️# Vibe Studio 4.0 "Cosmic"
+# Vibe Studio 5.0 "Omniverse"
 
-> **AI-Native Autonomous Coding Agent & Web/Distributed IDE Platform**
+> **AI-Native Autonomous Coding Agent & Web/Distributed/Security IDE Platform**
 
-Vibe Studio is an enterprise-grade, zero-trust AI coding assistant and IDE system built for local, web, and distributed agent swarms.
+Vibe Studio is an enterprise-grade, zero-trust AI coding assistant and IDE system built for local, web, distributed agent swarms, and AI security auditing.
+
+---
+
+## 🌌 What's New in Vibe Studio 5.0 "Omniverse"
+
+1. **🎯 Intelligent Skill-Based Swarm Routing**:
+   - Swarm Workers register specialized skills (`python`, `security`, `refactor`, `test`).
+   - Swarm Coordinator intelligently routes tasks based on skill-matching, workload, and performance rating score.
+
+2. **🔍 Natural Language Code Search**:
+   - Query code in plain language (e.g., `vibe-studio search "məlumat bazasına qoşulan hissə haradadır?"`).
+   - Combines AST Symbol indexing with intent/synonym expansion.
+
+3. **📚 Auto-Documentation Engine**:
+   - Auto-generates `API_REFERENCE.md` and Mermaid.js class architecture diagrams (`vibe-studio doc`).
+
+4. **🔍 Automated PR Code Review Agent**:
+   - Analyzes git diffs for security credentials, performance bottlenecks, and type hint hints (`vibe-studio review --diff patch.diff`).
+
+5. **🛡️ AI Security Auditor**:
+   - Scans projects for secret leaks (AWS keys, GitHub tokens) and AST security vulnerabilities (`vibe-studio audit`).
 
 ---
 

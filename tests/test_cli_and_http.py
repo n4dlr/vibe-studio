@@ -72,3 +72,22 @@ class TestCLIAndHTTP:
         res_search = cli_main(["--root", str(tmp_path), "plugin", "search", "Docker"])
         assert res_search == 0
 
+    def test_v5_omniverse_cli_and_rest(self, server, tmp_path):
+        # 1. Search endpoint
+        resp = urllib.request.urlopen("http://127.0.0.1:8899/api/v1/search?q=database")
+        assert resp.status == 200
+
+        # 2. Audit endpoint
+        resp_audit = urllib.request.urlopen("http://127.0.0.1:8899/api/v1/audit")
+        assert resp_audit.status == 200
+
+        # 3. Doc endpoint
+        resp_doc = urllib.request.urlopen("http://127.0.0.1:8899/api/v1/doc")
+        assert resp_doc.status == 200
+
+        # 4. CLI commands: search, doc, review, audit
+        assert cli_main(["--root", str(tmp_path), "search", "user auth"]) == 0
+        assert cli_main(["--root", str(tmp_path), "doc"]) == 0
+        assert cli_main(["--root", str(tmp_path), "review"]) == 0
+        assert cli_main(["--root", str(tmp_path), "audit"]) == 0
+

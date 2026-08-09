@@ -30,6 +30,8 @@ class WorkerStatus:
     active_tasks: int = 0
     max_tasks: int = 4
     capabilities: list[str] = field(default_factory=lambda: ["python", "refactor", "test"])
+    skills: list[str] = field(default_factory=lambda: ["python", "refactor", "test", "security"])
+    performance_rating: float = 1.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -53,6 +55,7 @@ class TaskRequest:
     context: Dict[str, Any] = field(default_factory=dict)
     assigned_worker: Optional[str] = None
     status: TaskStatus = TaskStatus.PENDING
+    required_skills: list[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)

@@ -36,15 +36,16 @@ def test_websocket_server_broadcast():
             "Sec-WebSocket-Version: 13\r\n\r\n"
         )
         sock.sendall(req.encode("utf-8"))
-        resp = sock.recv(1024).decode("utf-8")
-        assert "101 Switching Protocols" in resp
-
         time.sleep(0.1)
+
+        # Read handshake status
+        sock.settimeout(2.0)
+        resp_data = sock.recv(512)
+        assert b"101 Switching Protocols" in resp_data
 
         # Broadcast event
         ws_server.broadcast("test_event", {"foo": "bar"})
 
-        sock.settimeout(2.0)
         data = sock.recv(1024)
         assert len(data) > 0
         sock.close()
