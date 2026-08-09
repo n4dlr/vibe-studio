@@ -323,3 +323,45 @@ class AgentOrchestrator:
         self._notify_progress("orchestration_completed", {"summary": final_result.summary})
         yield _ev("result", "done", {"result": final_result})
 
+    def execute_moa_consensus_task(
+        self,
+        prompt: str,
+        num_candidates: int = 2,
+    ) -> OrchestratedExecutionResult:
+        """Run Mixture of Agents (MoA) — generate candidate proposals concurrently, evaluate with Judge Agent, and execute best."""
+        import concurrent.futures
+        self._notify_progress("moa_consensus_start", {"candidates": num_candidates})
+
+        def _run_proposal(agent_id: int):
+            agent = AutonomousAgent(
+                project_root=self.workspace_root,
+                provider=self.provider,
+                model=self.model,
+                autonomy_mode=AutonomyMode.AUTO,
+            )
+            res = agent.run(f"[PROPOSAL #{agent_id+1}] {prompt}")
+            diff_text = agent.tool_registry.patch_tools.history[-1].diff if agent.tool_registry.patch_tools.history else ""
+            review = self.reviewer.review_diff(diff_text)
+            return agent_id, res, review
+
+        proposals = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_candidates) as executor:
+            futures = [executor.submit(_run_proposal, i) for i in range(num_candidates)]
+            for f in concurrent.futures.as_completed(futures):
+                try:
+                    proposals.append(f.result())
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).warning("MoA proposal execution failed: %s", exc)
+
+        if proposals:
+            best_id, best_res, best_review = max(proposals, key=lambda p: p[2].score)
+            self._notify_progress("moa_judge_selected", {"best_id": best_id+1, "score": best_review.score})
+            return OrchestratedExecutionResult(
+                prompt=prompt,
+                execution_result=best_res,
+                review_result=best_review,
+                summary=f"MoA Judge selected Proposal #{best_id+1} (Score: {best_review.score}/100)",
+            )
+
+        return self.execute_task(prompt)

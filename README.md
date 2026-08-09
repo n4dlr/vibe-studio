@@ -275,6 +275,19 @@ pytest tests/test_integration.py  # will use running Ollama if available
 
 ## Completed Production IDE Capabilities & Architecture
 
+- **12-Pillar Ultimate AI IDE Architecture**:
+  1. **Infinite Context Engine (Local RAG)**: AST file chunking, SQLite index database (`.vibe_studio/index.db`), token budgeting, and optional `sentence-transformers` vector search.
+  2. **Mixture of Agents (MoA) & Judge Agent**: Parallel candidate proposal generation via `ThreadPoolExecutor` and diff quality evaluation by `ReviewerAgent`.
+  3. **Self-Healing TDD Loop**: Automatic transition to `FIXING` state on test failures, traceback fingerprint tracking, and line-number repair hints.
+  4. **Broad Plugin Ecosystem (`@vibe_plugin`)**: `PluginManager` discovers third-party tools in `.vibe_studio/plugins/` and registers them dynamically in `ToolRegistry`.
+  5. **Local Network Collaboration & Streaming**: Live event streaming and peer IDE activity broadcasting via `APIServerHandler`.
+  6. **Monorepo Incremental Scanner**: Persistent SQLite symbol index with hash-based incremental rescan optimization.
+  7. **Proactive Code Intelligence (LSP)**: `LSPContextProvider` symbol reference & hover pre-analysis injected into agent planning prompts.
+  8. **Zero Trust Native Sandboxing**: Zero-dependency host process isolation, workspace boundary enforcement (`PathSecurity`), and audit logging without Docker.
+  9. **Visual Agent Thought Chain**: Interactive UI timeline cards for agent reasoning and tool executions.
+  10. **Turbo Mode & Fast-Path Prompt Caching**: Compact prompt fast-paths for single-file edits and smart post-write auto-completion.
+  11. **Persistent Project Memory**: SQLite project memory (`.vibe_studio/memory.db`) storing task history, error fixes, and project context hints.
+  12. **Playground & Chat Persistence**: Auto-persisted conversation history (`.vibe_studio/chat_history.json`), clear chat, and Markdown export (`📥`).
 - **Production-Grade LSP Protocol & Fallback Engine (`LSPClient` & `CodeIntelligenceEngine`)**:
   - **LSP-First Router**: `CodeIntelligenceEngine` routes all definition, references, hover, completion, document symbols, and workspace symbols through LSP servers when available and healthy, seamlessly falling back to AST (Python) and regex symbol indexing when LSP servers are missing or timed out.
   - **Server Discovery (`LSPServerRegistry`)**: Automatic discovery and metadata management for `pyright-langserver`, `pylsp`, `typescript-language-server`, `gopls`, `rust-analyzer`, `clangd`, and `vscode-langservers-extracted`.

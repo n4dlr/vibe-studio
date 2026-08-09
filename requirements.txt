@@ -2,3 +2,6 @@ PySide6>=6.8.0
 requests>=2.32.0
 httpx>=0.27.0
 pytest>=8.0.0
+
+# Optional vector RAG (Pillar 1 Infinite Context)
+# sentence-transformers>=2.2.0

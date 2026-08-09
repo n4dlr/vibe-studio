@@ -50,3 +50,26 @@ class APIServerHandler:
 
         prompt = f"Fix the following error in the project:\n{error_message}"
         return self.handle_chat(prompt, api_key=api_key)
+
+    def create_collaborative_session(self, prompt: str, api_key: str = "") -> dict[str, Any]:
+        """Broadcast live agent activity events for peer IDE instances."""
+        if not APIAuth.verify_key(api_key):
+            return {"error": "Unauthorized: Invalid API key", "status_code": 401}
+
+        events: list[dict[str, Any]] = []
+
+        def _broadcast_cb(event_type: str, data: dict[str, Any]):
+            events.append({"event": event_type, "data": data})
+
+        agent = AutonomousAgent(
+            project_root=self.workspace_root,
+            autonomy_mode=AutonomyMode.AUTO,
+        )
+        agent.add_event_callback(_broadcast_cb)
+        res = agent.run(prompt)
+        return {
+            "status": res.status.value,
+            "summary": res.summary,
+            "files_changed": res.files_changed,
+            "events_stream": events,
+        }

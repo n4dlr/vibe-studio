@@ -385,10 +385,38 @@ class AutonomousAgent:
                 for mod in recent_mods:
                     mem_text += f"  - {mod.get('file', '')}: {mod.get('summary', '')}\n"
 
+        # Proactive LSP Code Intelligence (Pillar 7)
+        lsp_text = ""
+        try:
+            from vibe_studio.context.lsp_context_provider import LSPContextProvider
+            lsp_prov = LSPContextProvider(self.project_root)
+            import re
+            symbols = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", task)
+            sym_items = []
+            for sym in symbols[:3]:
+                if sym.lower() not in {"create", "write", "file", "make", "test", "clear", "code", "the", "this", "file", "simple", "hello"}:
+                    refs = lsp_prov.get_references(sym)
+                    hover = lsp_prov.get_hover_info(sym)
+                    if refs or hover:
+                        sym_items.append((sym, hover, refs))
+            if sym_items:
+                lsp_text = "\n[LSP CODE INTELLIGENCE]:\n"
+                for sym, hover, refs in sym_items:
+                    lsp_text += f"  Symbol '{sym}':\n"
+                    if hover:
+                        lsp_text += f"    Doc/Type: {hover[:120]}\n"
+                    if refs:
+                        ref_files = list({r['file'] for r in refs if r.get('file')})[:4]
+                        lsp_text += f"    Used in ({len(refs)} refs): {', '.join(ref_files)}\n"
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("LSP pre-analysis skipped: %s", exc)
+
         current_prompt = (
             f"USER REQUEST: {task}\n"
             f"{history_text}"
             f"{mem_text}"
+            f"{lsp_text}"
             f"\nPROJECT FILE CONTEXT:\n{context_text}\n"
         )
 

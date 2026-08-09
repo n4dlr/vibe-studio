@@ -568,6 +568,19 @@ class ToolRegistry:
             {"branch_name": S("string", "Branch name")},
             self.git_tools.git_checkout, risk=R.HIGH)
 
+        # ── Plugin Extensions ──────────────────────────────────────────
+        try:
+            from vibe_studio.plugin.plugin_manager import PluginManager
+            pm = PluginManager(project_root=self.workspace_root)
+            plugin_files = pm.discover_plugins()
+            for pf in plugin_files:
+                pm.load_plugin(pf, workspace_root=self.workspace_root)
+            for name, func in pm.registered_tools.items():
+                if name not in self.tools:
+                    self.register(name, f"[Plugin Tool] {name}", {}, func, risk=R.MEDIUM)
+        except Exception:
+            pass
+
 
 def _error_result(name: str, msg: str, duration: float = 0.0) -> dict[str, Any]:
     return {
