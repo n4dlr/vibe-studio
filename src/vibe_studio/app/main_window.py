@@ -1228,8 +1228,20 @@ class SettingsDialog(QDialog):
             if p.kind == "openai-compatible" and p.api_key:
                 self.api_key_edit.setText(p.api_key)
 
-        self.model_edit = QLineEdit(self.settings.default_model)
-        self.model_edit.setPlaceholderText("e.g. qwen2.5-coder:7b or gpt-4o-mini")
+        # Model selection dropdown (editable) + Refresh button
+        self.model_combo_box = QComboBox()
+        self.model_combo_box.setEditable(True)
+        self.model_combo_box.setPlaceholderText("Select or type model name...")
+        if self.settings.default_model:
+            self.model_combo_box.setCurrentText(self.settings.default_model)
+
+        self.refresh_models_btn = QPushButton("🔄 Refresh")
+        self.refresh_models_btn.setToolTip("Auto-detect installed models from provider")
+        self.refresh_models_btn.clicked.connect(self._fetch_models)
+
+        model_layout = QHBoxLayout()
+        model_layout.addWidget(self.model_combo_box, 1)
+        model_layout.addWidget(self.refresh_models_btn)
 
         # Context window spinbox
         from PySide6.QtWidgets import QSpinBox, QDoubleSpinBox
@@ -1265,7 +1277,7 @@ class SettingsDialog(QDialog):
         ai_form.addRow("Ollama URL:", self.ollama_url_edit)
         ai_form.addRow("API Base URL:", self.api_url_edit)
         ai_form.addRow("API Key:", self.api_key_edit)
-        ai_form.addRow("Default Model:", self.model_edit)
+        ai_form.addRow("Default Model:", model_layout)
         ai_form.addRow("Context Window:", self.num_ctx_spin)
         ai_form.addRow("Temperature:", self.temp_spin)
         ai_form.addRow("Max Output Tokens:", self.max_tokens_spin)
@@ -1318,6 +1330,38 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(save_btn)
         layout.addLayout(btn_row)
 
+        # Auto-fetch installed models on open
+        self._fetch_models()
+
+    def _fetch_models(self) -> None:
+        """Fetch installed models from local Ollama or API and update dropdown."""
+        from vibe_studio.providers.ollama_provider import OllamaProvider
+        from vibe_studio.providers.openai_compatible_provider import OpenAICompatibleProvider
+        provider_kind = self.provider_combo.currentText()
+        current = self.model_combo_box.currentText().strip()
+        models = []
+        try:
+            if provider_kind == "ollama":
+                url = self.ollama_url_edit.text().strip() or "http://127.0.0.1:11434"
+                p = OllamaProvider(base_url=url, timeout=3)
+                models = [m.name for m in p.list_models()]
+            else:
+                key = self.api_key_edit.text().strip() or os.getenv("OPENAI_API_KEY", "")
+                p = OpenAICompatibleProvider(
+                    base_url=self.api_url_edit.text().strip(), api_key=key, timeout=3
+                )
+                models = [m.name for m in p.list_models()]
+        except Exception:
+            pass
+
+        if models:
+            self.model_combo_box.clear()
+            self.model_combo_box.addItems(models)
+            if current and current in models:
+                self.model_combo_box.setCurrentText(current)
+            elif self.settings.default_model and self.settings.default_model in models:
+                self.model_combo_box.setCurrentText(self.settings.default_model)
+
     def _test_connection(self) -> None:
         from vibe_studio.providers.ollama_provider import OllamaProvider
         from vibe_studio.providers.openai_compatible_provider import OpenAICompatibleProvider
@@ -1327,8 +1371,11 @@ class SettingsDialog(QDialog):
                 p = OllamaProvider(base_url=self.ollama_url_edit.text().strip(), timeout=5)
                 ok = p.test_connection()
                 models = [m.name for m in p.list_models()] if ok else []
+                if models:
+                    self.model_combo_box.clear()
+                    self.model_combo_box.addItems(models)
                 self.conn_result.setText(
-                    f"✓ Connected. Models: {', '.join(models[:3])}" if ok else "✗ Could not connect to Ollama"
+                    f"✓ Connected. Found {len(models)} models: {', '.join(models[:3])}" if ok else "✗ Could not connect to Ollama"
                 )
             else:
                 key = self.api_key_edit.text().strip() or os.getenv("OPENAI_API_KEY", "")
@@ -1336,6 +1383,10 @@ class SettingsDialog(QDialog):
                     base_url=self.api_url_edit.text().strip(), api_key=key, timeout=5
                 )
                 ok = p.test_connection()
+                models = [m.name for m in p.list_models()] if ok else []
+                if models:
+                    self.model_combo_box.clear()
+                    self.model_combo_box.addItems(models)
                 self.conn_result.setText("✓ Connected to API" if ok else "✗ API connection failed")
         except Exception as e:
             self.conn_result.setText(f"✗ Error: {e}")
@@ -1363,7 +1414,7 @@ class SettingsDialog(QDialog):
     def _save(self) -> None:
         provider_kind = self.provider_combo.currentText()
         self.settings.default_provider = provider_kind
-        self.settings.default_model = self.model_edit.text().strip()
+        self.settings.default_model = self.model_combo_box.currentText().strip()
         self.settings.local_only = self.local_only_cb.isChecked()
         self.settings.dark_theme = self.dark_theme_cb.isChecked()
         try:
