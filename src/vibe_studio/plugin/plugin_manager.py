@@ -95,11 +95,15 @@ class PluginManager:
             return False
 
         # Collect @vibe_plugin decorated functions registered during module exec
-        plugin_tools = {name: tool for name, tool in _REGISTRY.items()
-                        if name not in self.registered_tools}
+        current_module_tools = {
+            name: tool for name, tool in _REGISTRY.items()
+            if getattr(tool.func, "__module__", "") == module.__name__
+        }
+
+        self._loaded_files.append(str(path))
 
         # Also support legacy register_tools() pattern
-        if hasattr(module, "register_tools") and not plugin_tools:
+        if hasattr(module, "register_tools") and not current_module_tools:
             try:
                 legacy = module.register_tools()
                 if isinstance(legacy, dict):
@@ -109,11 +113,10 @@ class PluginManager:
             except Exception as exc:
                 logger.warning("Plugin %s register_tools() failed: %s", path.name, exc)
 
-        for name, tool in plugin_tools.items():
+        for name, tool in current_module_tools.items():
             self.registered_tools[name] = self._sandbox_tool(tool, workspace_root)
 
-        self._loaded_files.append(str(path))
-        logger.info("Loaded plugin: %s (%d tools)", path.name, len(plugin_tools))
+        logger.info("Loaded plugin: %s (%d tools)", path.name, len(current_module_tools))
         return True
 
     def load_all_plugins(self, workspace_root: Path | None = None) -> int:

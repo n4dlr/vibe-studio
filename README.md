@@ -313,7 +313,22 @@ Vibe Studio 2.0 implements 7 fundamental architectural pillars for enterprise-gr
 4. **Plugin Subprocess Sandbox (`src/vibe_studio/plugin/plugin_worker.py`)**: JSON-RPC subprocess isolation for `HIGH`-risk plugin tools with workspace path enforcement.
 5. **Adaptive Turbo Mode (`src/vibe_studio/agents/complexity_classifier.py`)**: 3-tier task routing (`FAST` sub-second, `NORMAL` standard, `DEEP` full Graph RAG + MoA).
 6. **Explainable AI (`src/vibe_studio/ui/ai_activity_panel.py`)**: `REASON:` prefix parsing rendering visual yellow `💡 Reason:` badges on activity cards.
-7. **Multi-Project Global Memory (`src/vibe_studio/core/global_memory.py`)**: SQLite pattern store (`~/.vibe_studio/global_memory.db`) sharing solution patterns across projects.
+---
+
+## 🏛️ Vibe Studio 3.0 "Titan" Architecture
+
+Vibe Studio 3.0 expands the IDE into a multi-interface, high-scale enterprise platform:
+
+1. **Multi-core Parallel Graph Builder (`src/vibe_studio/context/parallel_graph_builder.py`)**: `ProcessPoolExecutor` multi-core AST parsing for 100k+ node monorepos.
+2. **Global Memory LRU Cache & Consolidation (`src/vibe_studio/core/global_memory.py`)**: `LRUPatternCache` + `consolidate_patterns()` Jaccard similarity pattern clustering.
+3. **CLI & Headless REST API Server (`src/vibe_studio/cli.py`, `src/vibe_studio/api/http_server.py`)**:
+   - `vibe-studio run "prompt"`: Headless command-line task execution.
+   - `vibe-studio server`: HTTP REST JSON API endpoints (`/health`, `/api/v1/execute`, `/api/v1/graph`, `/api/v1/context`, `/api/v1/memory`).
+   - `vibe-studio index`: Pre-indexes AST call graph on disk.
+4. **Official Enterprise Plugins (`src/vibe_studio/plugin/official/`)**: Pure Python plugins for Git PR descriptions, Webhook/Slack notifications, and Python package inspection.
+5. **Interactive Visual Code Graph UI (`src/vibe_studio/ui/graph_visualizer_widget.py`)**: PySide6 `QGraphicsView` node/edge visualization of the AST CodeGraph.
+6. **Agent Trainer UI (`src/vibe_studio/ui/agent_trainer_dialog.py`)**: GUI dialog for direct manual pattern injection into GlobalMemory.
+7. **Monorepo Stress & Fuzzing Suite (`tests/test_monorepo_stress.py`, `tests/test_security_fuzzing.py`)**: 10,000-file monorepo benchmarks and path traversal security fuzzing tests.
 
 
 ## ⚠️ Disclaimer & Security

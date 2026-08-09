@@ -143,7 +143,7 @@ class TestEvolutionPhase2:
 class TestEvolutionPhase3:
     def test_plugin_manager(self, tmp_path):
         plugin_dir = tmp_path / "plugins"
-        pm = PluginManager(plugin_dir)
+        pm = PluginManager(global_plugins_dir=plugin_dir, project_root=None)
 
         p_file = plugin_dir / "sample_plugin.py"
         p_file.write_text('def register_tools(): return {"sample_tool": lambda: "hello"}\n', encoding="utf-8")

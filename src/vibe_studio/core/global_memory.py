@@ -25,6 +25,7 @@ import json
 import logging
 import sqlite3
 import time
+from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,30 @@ logger = logging.getLogger(__name__)
 
 _GLOBAL_DB_DIR = Path.home() / ".vibe_studio"
 _GLOBAL_DB_PATH = _GLOBAL_DB_DIR / "global_memory.db"
+
+
+class LRUPatternCache:
+    """In-memory LRU cache for pattern lookups."""
+
+    def __init__(self, capacity: int = 500) -> None:
+        self.capacity = capacity
+        self._cache: OrderedDict[str, list[PatternRecord]] = OrderedDict()
+
+    def get(self, key: str) -> list[PatternRecord] | None:
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        return None
+
+    def put(self, key: str, value: list[PatternRecord]) -> None:
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        self._cache[key] = value
+        if len(self._cache) > self.capacity:
+            self._cache.popitem(last=False)
+
+    def clear(self) -> None:
+        self._cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +89,10 @@ class PatternRecord:
 class GlobalMemory:
     """Manages cross-project patterns in a single user-level SQLite database."""
 
-    def __init__(self, db_path: Path | None = None) -> None:
+    def __init__(self, db_path: Path | None = None, cache_capacity: int = 500) -> None:
         self.db_path = db_path or _GLOBAL_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._cache = LRUPatternCache(capacity=cache_capacity)
         self._init_db()
 
     # ------------------------------------------------------------------
@@ -142,6 +168,7 @@ class GlobalMemory:
                     "VALUES (?, ?, ?, ?, 1, ?)",
                     (framework, pattern_type, keyword, solution, time.time()),
                 )
+        self._cache.clear()
 
     # ------------------------------------------------------------------
     # Read
@@ -241,6 +268,51 @@ class GlobalMemory:
     # ------------------------------------------------------------------
     # Stats
     # ------------------------------------------------------------------
+
+    def consolidate_patterns(self, similarity_threshold: float = 0.8) -> int:
+        """Consolidate highly similar patterns (Jaccard similarity on prompt_keyword).
+
+        Merges duplicates by combining use_count into the pattern with highest use_count.
+        Returns count of merged pattern entries deleted.
+        """
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM patterns ORDER BY use_count DESC").fetchall()
+            records = [
+                PatternRecord(
+                    id=r["id"], framework=r["framework"], pattern_type=r["pattern_type"],
+                    prompt_keyword=r["prompt_keyword"], solution_summary=r["solution_summary"],
+                    use_count=r["use_count"], last_seen=r["last_seen"],
+                )
+                for r in rows
+            ]
+
+            merged_ids: set[int] = set()
+            for i in range(len(records)):
+                if records[i].id in merged_ids:
+                    continue
+                kw_i = set(records[i].prompt_keyword.lower().split())
+                if not kw_i:
+                    continue
+                for j in range(i + 1, len(records)):
+                    if records[j].id in merged_ids:
+                        continue
+                    if records[i].framework != records[j].framework:
+                        continue
+                    kw_j = set(records[j].prompt_keyword.lower().split())
+                    if not kw_j:
+                        continue
+                    jaccard = len(kw_i & kw_j) / float(len(kw_i | kw_j))
+                    if jaccard >= similarity_threshold:
+                        # Merge j into i
+                        conn.execute(
+                            "UPDATE patterns SET use_count = use_count + ? WHERE id = ?",
+                            (records[j].use_count, records[i].id),
+                        )
+                        conn.execute("DELETE FROM patterns WHERE id = ?", (records[j].id,))
+                        merged_ids.add(records[j].id)
+
+        self._cache.clear()
+        return len(merged_ids)
 
     def stats(self) -> dict[str, Any]:
         with self._conn() as conn:

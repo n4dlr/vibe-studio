@@ -30,7 +30,7 @@ graph = [
 ]
 
 [project.scripts]
-vibe-studio = "vibe_studio.__main__:main"
+vibe-studio = "vibe_studio.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
