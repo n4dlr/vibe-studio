@@ -93,45 +93,29 @@ class AgentOrchestrator:
         except Exception:
             pass
 
-    def execute_task(self, prompt: str, active_file: str | None = None) -> OrchestratedExecutionResult:
-        timings: list[PipelineStageTiming] = []
+    # ------------------------------------------------------------------
+    # Adaptive Routing — core decision
+    # ------------------------------------------------------------------
 
-        # 1. Intent Analysis
-        t0 = time.monotonic()
-        self._notify_progress("intent_analysis_start", {"prompt": prompt})
-        self.intent_predictor.record_command(prompt)
-        suggestions = self.intent_predictor.predict_next(prompt)
-        timings.append(PipelineStageTiming("intent_analysis", time.monotonic() - t0, details=f"Predicted {len(suggestions)} actions"))
-
-        # 2. Navigation & File Discovery
-        t0 = time.monotonic()
-        self._notify_progress("navigation_start", {})
-        navigated = self.navigator.discover_relevant_files(prompt)
-        timings.append(PipelineStageTiming("navigation", time.monotonic() - t0, details=f"Found {len(navigated)} files"))
-
-        # 2b. Adaptive Turbo Mode (Sütun 5)
-        complexity = self._complexity_clf.classify(prompt, active_file, len(navigated))
-        self._notify_progress("complexity_classified", {"tier": complexity.name})
-        logger.debug("Task complexity: %s", complexity.name)
-
-        # 2c. Global memory hint (Sütun 7)
-        global_hint = self._global_memory.build_global_hint(prompt)
-        if global_hint:
-            logger.debug("Global memory hint available (%d chars)", len(global_hint))
-
-        # 3. Context Engine Ranking
-        t0 = time.monotonic()
-        self._notify_progress("context_building_start", {})
-        bundle = self.context_engine.build(
-            prompt=prompt,
-            active_file=active_file or (navigated[0] if navigated else None),
-            token_budget=16000,
+    def _classify_task(
+        self,
+        prompt: str,
+        active_file: str | None,
+        navigated_count: int,
+    ) -> TaskComplexity:
+        """Classify task and broadcast the tier to the Activity Panel."""
+        complexity = self._complexity_clf.classify(prompt, active_file, navigated_count)
+        self._notify_progress(
+            "complexity_classified",
+            {
+                "tier": complexity.name,
+                "description": self._complexity_clf.describe(complexity),
+            },
         )
-        timings.append(PipelineStageTiming("context_building", time.monotonic() - t0, details=f"Ranked {len(bundle.items)} items ({bundle.total_tokens_est} est tokens)"))
+        logger.debug("Adaptive routing: %s", complexity.name)
+        return complexity
 
-        # 4. Coding Agent Execution
-        t0 = time.monotonic()
-        self._notify_progress("agent_execution_start", {})
+    def _make_agent(self) -> AutonomousAgent:
         agent = AutonomousAgent(
             project_root=self.workspace_root,
             provider=self.provider,
@@ -140,47 +124,118 @@ class AgentOrchestrator:
             max_iterations=self.max_iterations,
             stream_callback=self.stream_callback,
         )
+        agent.add_event_callback(
+            lambda etype, d: self._notify_progress(f"agent_{etype}", d)
+        )
+        return agent
 
-        def _agent_event(event_type: str, data: dict[str, Any]):
-            self._notify_progress(f"agent_{event_type}", data)
+    # ------------------------------------------------------------------
+    # FAST path — surgical single-file change, minimal overhead
+    # ------------------------------------------------------------------
 
-        agent.add_event_callback(_agent_event)
+    def _execute_fast(
+        self,
+        prompt: str,
+        timings: list[PipelineStageTiming],
+    ) -> OrchestratedExecutionResult:
+        """⚡ FAST — skip intent/nav/context/review/test stages entirely."""
+        t0 = time.monotonic()
+        self._notify_progress("agent_execution_start", {"mode": "FAST"})
+        agent = self._make_agent()
         exec_res = agent.run(prompt)
-        timings.append(PipelineStageTiming("agent_execution", time.monotonic() - t0, status=exec_res.status.value, details=f"Changed {len(exec_res.files_changed)} files"))
+        timings.append(
+            PipelineStageTiming(
+                "agent_execution",
+                time.monotonic() - t0,
+                status=exec_res.status.value,
+                details=f"FAST path — changed {len(exec_res.files_changed)} files",
+            )
+        )
+        summary = (
+            f"[⚡ FAST] Task: {prompt}\n"
+            f"Agent: {exec_res.status.value} ({len(exec_res.files_changed)} files) "
+            f"in {timings[-1].duration_seconds:.2f}s"
+        )
+        self._notify_progress("orchestration_completed", {"summary": summary})
+        return OrchestratedExecutionResult(
+            prompt=prompt,
+            execution_result=exec_res,
+            stage_timings=timings,
+            summary=summary,
+        )
+
+    # ------------------------------------------------------------------
+    # NORMAL path — standard pipeline, no MoA
+    # ------------------------------------------------------------------
+
+    def _execute_normal(
+        self,
+        prompt: str,
+        active_file: str | None,
+        timings: list[PipelineStageTiming],
+    ) -> OrchestratedExecutionResult:
+        """🔄 NORMAL — intent + nav + context + agent + review + test."""
+        # 1. Intent
+        t0 = time.monotonic()
+        self._notify_progress("intent_analysis_start", {"prompt": prompt})
+        self.intent_predictor.record_command(prompt)
+        suggestions = self.intent_predictor.predict_next(prompt)
+        timings.append(PipelineStageTiming("intent_analysis", time.monotonic() - t0))
+
+        # 2. Navigation
+        t0 = time.monotonic()
+        self._notify_progress("navigation_start", {})
+        navigated = self.navigator.discover_relevant_files(prompt)
+        timings.append(PipelineStageTiming("navigation", time.monotonic() - t0,
+                       details=f"Found {len(navigated)} files"))
+
+        # 3. Context
+        t0 = time.monotonic()
+        self._notify_progress("context_building_start", {})
+        bundle = self.context_engine.build(
+            prompt=prompt,
+            active_file=active_file or (navigated[0] if navigated else None),
+            token_budget=16000,
+        )
+        timings.append(PipelineStageTiming("context_building", time.monotonic() - t0,
+                       details=f"{len(bundle.items)} items"))
+
+        # 4. Agent
+        t0 = time.monotonic()
+        self._notify_progress("agent_execution_start", {"mode": "NORMAL"})
+        agent = self._make_agent()
+        exec_res = agent.run(prompt)
+        timings.append(PipelineStageTiming("agent_execution", time.monotonic() - t0,
+                       status=exec_res.status.value,
+                       details=f"Changed {len(exec_res.files_changed)} files"))
 
         # 5. Code Review
         t0 = time.monotonic()
-        self._notify_progress("code_review_start", {})
-        diff_text = ""
-        if self.patch_tools.history:
-            diff_text = self.patch_tools.history[-1].diff
+        diff_text = self.patch_tools.history[-1].diff if self.patch_tools.history else ""
         review_res = self.reviewer.review_diff(diff_text)
-        timings.append(PipelineStageTiming("code_review", time.monotonic() - t0, status="passed" if review_res.passed else "failed", details=f"Score: {review_res.score}/100"))
+        timings.append(PipelineStageTiming("code_review", time.monotonic() - t0,
+                       status="passed" if review_res.passed else "failed"))
 
-        # 6. Test Runner & Self-Repair
+        # 6. Test + self-repair
         t0 = time.monotonic()
-        self._notify_progress("test_runner_start", {})
         test_res = self.terminal_tools.run_tests()
         if test_res.get("exit_code") != 0 and test_res.get("stderr"):
-            self._notify_progress("self_repair_triggered", {"stderr": test_res.get("stderr")})
-            tb_analysis = self.debug_assistant.analyze_traceback(test_res["stderr"])
-            if tb_analysis.file_path and Path(self.workspace_root / tb_analysis.file_path).exists():
-                agent.run(f"Fix error in {tb_analysis.file_path}: {tb_analysis.error_message}")
+            tb = self.debug_assistant.analyze_traceback(test_res["stderr"])
+            if tb.file_path and Path(self.workspace_root / tb.file_path).exists():
+                agent.run(f"Fix error in {tb.file_path}: {tb.error_message}")
                 test_res = self.terminal_tools.run_tests()
-        timings.append(PipelineStageTiming("test_validation", time.monotonic() - t0, status="success" if test_res.get("exit_code") == 0 else "failed"))
+        timings.append(PipelineStageTiming("test_validation", time.monotonic() - t0,
+                       status="success" if test_res.get("exit_code") == 0 else "failed"))
 
-        # 7. Final Report Synthesis
         summary_lines = [
-            f"Task: {prompt}",
-            f"Navigation: Found {len(navigated)} relevant files ({', '.join(navigated[:3])})",
-            f"Agent Execution: {exec_res.status.value} ({len(exec_res.files_changed)} files changed)",
-            f"Code Review: Score {review_res.score}/100 ({'PASSED' if review_res.passed else 'FAILED'})",
-            f"Tests: Exit Code {test_res.get('exit_code', 0)}",
-            f"Total Duration: {sum(t.duration_seconds for t in timings):.2f}s",
+            f"[🔄 NORMAL] Task: {prompt}",
+            f"Navigation: {len(navigated)} files ({', '.join(navigated[:3])})",
+            f"Agent: {exec_res.status.value} ({len(exec_res.files_changed)} files changed)",
+            f"Review: {review_res.score}/100 ({'PASSED' if review_res.passed else 'FAILED'})",
+            f"Tests: exit={test_res.get('exit_code', 0)}",
+            f"Total: {sum(t.duration_seconds for t in timings):.2f}s",
         ]
-
         self._notify_progress("orchestration_completed", {"summary": "\n".join(summary_lines)})
-
         return OrchestratedExecutionResult(
             prompt=prompt,
             intent_suggestions=suggestions,
@@ -191,6 +246,64 @@ class AgentOrchestrator:
             stage_timings=timings,
             summary="\n".join(summary_lines),
         )
+
+    # ------------------------------------------------------------------
+    # DEEP path — full pipeline + MoA consensus judge
+    # ------------------------------------------------------------------
+
+    def _execute_deep(
+        self,
+        prompt: str,
+        active_file: str | None,
+        timings: list[PipelineStageTiming],
+    ) -> OrchestratedExecutionResult:
+        """🧠 DEEP — full pipeline: Graph RAG + LSP + MoA consensus."""
+        # Steps 1-6 identical to NORMAL first
+        result = self._execute_normal(prompt, active_file, timings)
+
+        # Extra: MoA consensus over the already-executed result
+        t0 = time.monotonic()
+        self._notify_progress("moa_consensus_start", {"mode": "DEEP"})
+        try:
+            moa_result = self.execute_moa_consensus_task(prompt, num_candidates=2)
+            # Replace execution result if MoA produced a better one
+            if (
+                moa_result.review_result
+                and result.review_result
+                and moa_result.review_result.score > result.review_result.score
+            ):
+                result = moa_result
+                logger.info("DEEP: MoA consensus improved score to %d", moa_result.review_result.score)
+        except Exception as exc:
+            logger.warning("DEEP: MoA consensus failed (%s) — using NORMAL result", exc)
+        timings.append(PipelineStageTiming("moa_consensus", time.monotonic() - t0))
+
+        # Update summary prefix
+        result.summary = f"[🧠 DEEP] " + result.summary.lstrip("[🔄 NORMAL] ")
+        self._notify_progress("orchestration_completed", {"summary": result.summary})
+        return result
+
+    # ------------------------------------------------------------------
+    # Public entry points
+    # ------------------------------------------------------------------
+
+    def execute_task(self, prompt: str, active_file: str | None = None) -> OrchestratedExecutionResult:
+        timings: list[PipelineStageTiming] = []
+
+        # Global memory hint
+        global_hint = self._global_memory.build_global_hint(prompt)
+        if global_hint:
+            logger.debug("Global memory hint available (%d chars)", len(global_hint))
+
+        # Quick pre-navigation classification (file count unknown yet → 0)
+        complexity = self._classify_task(prompt, active_file, 0)
+
+        if complexity == TaskComplexity.FAST:
+            return self._execute_fast(prompt, timings)
+        elif complexity == TaskComplexity.NORMAL:
+            return self._execute_normal(prompt, active_file, timings)
+        else:  # DEEP
+            return self._execute_deep(prompt, active_file, timings)
 
     def execute_task_stream(
         self,
@@ -228,119 +341,172 @@ class AgentOrchestrator:
 
         timings: list[PipelineStageTiming] = []
 
-        # ── Stage 1: Intent Analysis ─────────────────────────────────────
-        yield _ev("intent_analysis", "start", {"prompt": prompt})
-        t0 = time.monotonic()
-        try:
-            self.intent_predictor.record_command(prompt)
-            suggestions = self.intent_predictor.predict_next(prompt)
-            timings.append(PipelineStageTiming("intent_analysis", time.monotonic() - t0))
-            yield _ev("intent_analysis", "done", {"suggestions": suggestions})
-        except Exception as exc:
-            timings.append(PipelineStageTiming("intent_analysis", time.monotonic() - t0, status="error"))
-            yield _ev("intent_analysis", "error", {"error": str(exc)})
-            suggestions = []
+        # ── Pre-flight: classify complexity ──────────────────────────────
+        complexity = self._classify_task(prompt, active_file, 0)
+        yield _ev("complexity_classified", "done", {
+            "tier": complexity.name,
+            "description": self._complexity_clf.describe(complexity),
+        })
 
-        # ── Stage 2: Navigation ──────────────────────────────────────────
-        yield _ev("navigation", "start")
-        t0 = time.monotonic()
-        try:
-            navigated = self.navigator.discover_relevant_files(prompt)
-            timings.append(PipelineStageTiming("navigation", time.monotonic() - t0, details=f"Found {len(navigated)} files"))
-            yield _ev("navigation", "done", {"files": navigated})
-        except Exception as exc:
-            timings.append(PipelineStageTiming("navigation", time.monotonic() - t0, status="error"))
-            yield _ev("navigation", "error", {"error": str(exc)})
-            navigated = []
+        suggestions: list[str] = []
+        navigated: list[str] = []
+        exec_res = AgentTaskResult(status=AgentState.FAILED, task=prompt, summary="not run")
+        review_res = ReviewResult(passed=True, score=100, feedback=[])
+        test_res: dict[str, Any] = {"exit_code": 0}
 
-        # ── Stage 3: Context Building ────────────────────────────────────
-        yield _ev("context_building", "start")
-        t0 = time.monotonic()
-        try:
-            bundle = self.context_engine.build(
-                prompt=prompt,
-                active_file=active_file or (navigated[0] if navigated else None),
-                token_budget=16000,
-            )
-            timings.append(PipelineStageTiming("context_building", time.monotonic() - t0,
-                details=f"Ranked {len(bundle.items)} items ({bundle.total_tokens_est} est tokens)"))
-            yield _ev("context_building", "done", {"items": len(bundle.items), "tokens_est": bundle.total_tokens_est})
-        except Exception as exc:
-            timings.append(PipelineStageTiming("context_building", time.monotonic() - t0, status="error"))
-            yield _ev("context_building", "error", {"error": str(exc)})
-            bundle = None  # type: ignore[assignment]
+        # ── ⚡ FAST path — agent only, no pipeline overhead ───────────────
+        if complexity == TaskComplexity.FAST:
+            yield _ev("agent_execution", "start", {"prompt": prompt, "mode": "FAST"})
+            t0 = time.monotonic()
+            try:
+                agent = self._make_agent()
+                exec_res = agent.run(prompt)
+                timings.append(PipelineStageTiming(
+                    "agent_execution", time.monotonic() - t0,
+                    status=exec_res.status.value,
+                    details=f"FAST — {len(exec_res.files_changed)} files",
+                ))
+                yield _ev("agent_execution", "done", {
+                    "status": exec_res.status.value,
+                    "files_changed": exec_res.files_changed,
+                    "mode": "FAST",
+                })
+            except Exception as exc:
+                timings.append(PipelineStageTiming("agent_execution", time.monotonic() - t0, status="error"))
+                yield _ev("agent_execution", "error", {"error": str(exc)})
+                exec_res = AgentTaskResult(status=AgentState.FAILED, task=prompt, summary=str(exc))
 
-        # ── Stage 4: Agent Execution ─────────────────────────────────────
-        yield _ev("agent_execution", "start", {"prompt": prompt})
-        t0 = time.monotonic()
-        try:
-            agent = AutonomousAgent(
-                project_root=self.workspace_root,
-                provider=self.provider,
-                model=self.model,
-                autonomy_mode=AutonomyMode.AUTO,
-                max_iterations=self.max_iterations,
-                stream_callback=self.stream_callback,
-            )
-            agent.add_event_callback(lambda etype, d: self._notify_progress(f"agent_{etype}", d))
-            exec_res = agent.run(prompt)
-            timings.append(PipelineStageTiming("agent_execution", time.monotonic() - t0,
-                status=exec_res.status.value, details=f"Changed {len(exec_res.files_changed)} files"))
-            yield _ev("agent_execution", "done", {
-                "status": exec_res.status.value,
-                "files_changed": exec_res.files_changed,
-            })
-        except Exception as exc:
-            timings.append(PipelineStageTiming("agent_execution", time.monotonic() - t0, status="error"))
-            yield _ev("agent_execution", "error", {"error": str(exc)})
-            exec_res = AgentTaskResult(status=AgentState.FAILED, task=prompt, summary=str(exc))
+        else:
+            # ── Stage 1: Intent Analysis (NORMAL + DEEP) ─────────────────
+            yield _ev("intent_analysis", "start", {"prompt": prompt})
+            t0 = time.monotonic()
+            try:
+                self.intent_predictor.record_command(prompt)
+                suggestions = self.intent_predictor.predict_next(prompt)
+                timings.append(PipelineStageTiming("intent_analysis", time.monotonic() - t0))
+                yield _ev("intent_analysis", "done", {"suggestions": suggestions})
+            except Exception as exc:
+                timings.append(PipelineStageTiming("intent_analysis", time.monotonic() - t0, status="error"))
+                yield _ev("intent_analysis", "error", {"error": str(exc)})
+                suggestions = []
 
-        # ── Stage 5: Code Review ─────────────────────────────────────────
-        yield _ev("code_review", "start")
-        t0 = time.monotonic()
-        try:
-            diff_text = self.patch_tools.history[-1].diff if self.patch_tools.history else ""
-            review_res = self.reviewer.review_diff(diff_text)
-            timings.append(PipelineStageTiming("code_review", time.monotonic() - t0,
-                status="passed" if review_res.passed else "failed", details=f"Score: {review_res.score}/100"))
-            yield _ev("code_review", "done", {
-                "score": review_res.score,
-                "passed": review_res.passed,
-                "issue_count": len(review_res.issues),
-            })
-        except Exception as exc:
-            timings.append(PipelineStageTiming("code_review", time.monotonic() - t0, status="error"))
-            yield _ev("code_review", "error", {"error": str(exc)})
-            review_res = ReviewResult(passed=True, score=100, feedback=[])
+            # ── Stage 2: Navigation ──────────────────────────────────────
+            yield _ev("navigation", "start")
+            t0 = time.monotonic()
+            try:
+                navigated = self.navigator.discover_relevant_files(prompt)
+                timings.append(PipelineStageTiming("navigation", time.monotonic() - t0,
+                               details=f"Found {len(navigated)} files"))
+                yield _ev("navigation", "done", {"files": navigated})
+            except Exception as exc:
+                timings.append(PipelineStageTiming("navigation", time.monotonic() - t0, status="error"))
+                yield _ev("navigation", "error", {"error": str(exc)})
+                navigated = []
 
-        # ── Stage 6: Test Validation + Self-Repair ───────────────────────
-        yield _ev("test_validation", "start")
-        t0 = time.monotonic()
-        try:
-            test_res = self.terminal_tools.run_tests()
-            if test_res.get("exit_code") != 0 and test_res.get("stderr"):
-                yield _ev("self_repair", "start", {"error": test_res.get("stderr", "")[:300]})
-                tb_analysis = self.debug_assistant.analyze_traceback(test_res["stderr"])
-                if tb_analysis.file_path and Path(self.workspace_root / tb_analysis.file_path).exists():
-                    agent.run(f"Fix error in {tb_analysis.file_path}: {tb_analysis.error_message}")
-                    test_res = self.terminal_tools.run_tests()
-                yield _ev("self_repair", "done", {"exit_code": test_res.get("exit_code")})
-            timings.append(PipelineStageTiming("test_validation", time.monotonic() - t0,
-                status="success" if test_res.get("exit_code") == 0 else "failed"))
-            yield _ev("test_validation", "done", {"exit_code": test_res.get("exit_code", 0)})
-        except Exception as exc:
-            timings.append(PipelineStageTiming("test_validation", time.monotonic() - t0, status="error"))
-            yield _ev("test_validation", "error", {"error": str(exc)})
-            test_res = {"exit_code": -1, "stdout": "", "stderr": str(exc)}
+            # ── Stage 3: Context Building ────────────────────────────────
+            yield _ev("context_building", "start")
+            t0 = time.monotonic()
+            try:
+                bundle = self.context_engine.build(
+                    prompt=prompt,
+                    active_file=active_file or (navigated[0] if navigated else None),
+                    token_budget=16000,
+                )
+                timings.append(PipelineStageTiming("context_building", time.monotonic() - t0,
+                    details=f"Ranked {len(bundle.items)} items ({bundle.total_tokens_est} est tokens)"))
+                yield _ev("context_building", "done", {
+                    "items": len(bundle.items),
+                    "tokens_est": bundle.total_tokens_est,
+                })
+            except Exception as exc:
+                timings.append(PipelineStageTiming("context_building", time.monotonic() - t0, status="error"))
+                yield _ev("context_building", "error", {"error": str(exc)})
 
-        # ── Stage 7: Final Result ────────────────────────────────────────
+            # ── Stage 4: Agent Execution ─────────────────────────────────
+            yield _ev("agent_execution", "start", {"prompt": prompt, "mode": complexity.name})
+            t0 = time.monotonic()
+            try:
+                agent = self._make_agent()
+                exec_res = agent.run(prompt)
+                timings.append(PipelineStageTiming("agent_execution", time.monotonic() - t0,
+                    status=exec_res.status.value,
+                    details=f"Changed {len(exec_res.files_changed)} files"))
+                yield _ev("agent_execution", "done", {
+                    "status": exec_res.status.value,
+                    "files_changed": exec_res.files_changed,
+                })
+            except Exception as exc:
+                timings.append(PipelineStageTiming("agent_execution", time.monotonic() - t0, status="error"))
+                yield _ev("agent_execution", "error", {"error": str(exc)})
+                exec_res = AgentTaskResult(status=AgentState.FAILED, task=prompt, summary=str(exc))
+
+            # ── Stage 5: Code Review ─────────────────────────────────────
+            yield _ev("code_review", "start")
+            t0 = time.monotonic()
+            try:
+                diff_text = self.patch_tools.history[-1].diff if self.patch_tools.history else ""
+                review_res = self.reviewer.review_diff(diff_text)
+                timings.append(PipelineStageTiming("code_review", time.monotonic() - t0,
+                    status="passed" if review_res.passed else "failed",
+                    details=f"Score: {review_res.score}/100"))
+                yield _ev("code_review", "done", {
+                    "score": review_res.score,
+                    "passed": review_res.passed,
+                    "issue_count": len(review_res.issues),
+                })
+            except Exception as exc:
+                timings.append(PipelineStageTiming("code_review", time.monotonic() - t0, status="error"))
+                yield _ev("code_review", "error", {"error": str(exc)})
+                review_res = ReviewResult(passed=True, score=100, feedback=[])
+
+            # ── Stage 6: Test Validation + Self-Repair ───────────────────
+            yield _ev("test_validation", "start")
+            t0 = time.monotonic()
+            try:
+                test_res = self.terminal_tools.run_tests()
+                if test_res.get("exit_code") != 0 and test_res.get("stderr"):
+                    yield _ev("self_repair", "start", {"error": test_res.get("stderr", "")[:300]})
+                    tb_analysis = self.debug_assistant.analyze_traceback(test_res["stderr"])
+                    if tb_analysis.file_path and Path(self.workspace_root / tb_analysis.file_path).exists():
+                        agent.run(f"Fix error in {tb_analysis.file_path}: {tb_analysis.error_message}")
+                        test_res = self.terminal_tools.run_tests()
+                    yield _ev("self_repair", "done", {"exit_code": test_res.get("exit_code")})
+                timings.append(PipelineStageTiming("test_validation", time.monotonic() - t0,
+                    status="success" if test_res.get("exit_code") == 0 else "failed"))
+                yield _ev("test_validation", "done", {"exit_code": test_res.get("exit_code", 0)})
+            except Exception as exc:
+                timings.append(PipelineStageTiming("test_validation", time.monotonic() - t0, status="error"))
+                yield _ev("test_validation", "error", {"error": str(exc)})
+                test_res = {"exit_code": -1, "stdout": "", "stderr": str(exc)}
+
+            # ── Stage 7 (DEEP only): MoA consensus ───────────────────────
+            if complexity == TaskComplexity.DEEP:
+                yield _ev("moa_consensus", "start", {"candidates": 2})
+                t0 = time.monotonic()
+                try:
+                    moa_result = self.execute_moa_consensus_task(prompt, num_candidates=2)
+                    if (
+                        moa_result.review_result
+                        and review_res
+                        and moa_result.review_result.score > review_res.score
+                    ):
+                        exec_res = moa_result.execution_result or exec_res
+                        review_res = moa_result.review_result
+                    timings.append(PipelineStageTiming("moa_consensus", time.monotonic() - t0))
+                    yield _ev("moa_consensus", "done", {"score": review_res.score})
+                except Exception as exc:
+                    logger.warning("DEEP MoA failed: %s", exc)
+                    timings.append(PipelineStageTiming("moa_consensus", time.monotonic() - t0, status="error"))
+                    yield _ev("moa_consensus", "error", {"error": str(exc)})
+
+        # ── Final Result ─────────────────────────────────────────────────
+        tier_label = {"FAST": "⚡", "NORMAL": "🔄", "DEEP": "🧠"}.get(complexity.name, "")
         summary_lines = [
-            f"Task: {prompt}",
-            f"Navigation: Found {len(navigated)} relevant files ({', '.join(navigated[:3])})",
-            f"Agent Execution: {exec_res.status.value} ({len(exec_res.files_changed)} files changed)",
-            f"Code Review: Score {review_res.score}/100 ({'PASSED' if review_res.passed else 'FAILED'})",
-            f"Tests: Exit Code {test_res.get('exit_code', 0)}",
-            f"Total Duration: {sum(t.duration_seconds for t in timings):.2f}s",
+            f"[{tier_label} {complexity.name}] Task: {prompt}",
+            f"Agent: {exec_res.status.value} ({len(exec_res.files_changed)} files changed)",
+            f"Review: {review_res.score}/100 ({'PASSED' if review_res.passed else 'FAILED'})",
+            f"Tests: exit={test_res.get('exit_code', 0)}",
+            f"Duration: {sum(t.duration_seconds for t in timings):.2f}s",
         ]
         final_result = OrchestratedExecutionResult(
             prompt=prompt,

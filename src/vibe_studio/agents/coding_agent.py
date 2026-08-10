@@ -354,10 +354,16 @@ class AutonomousAgent:
         raw_budget = 16000
         token_budget = adapt_context_to_model(raw_budget, self._capabilities)
 
-        # Detect simple task first (before system prompt construction)
+        # Detect truly simple task: pure CREATE or DELETE with no analysis/editing of existing code
+        # IMPORTANT: "add", "fix", "implement", "farewell" etc. are NOT simple — they need context
         _simple_task = (
-            not any(k in task.lower() for k in ["refactor", "debug", "fix", "analyze", "explain", "find", "search", "test"])
-            and len(task) < 200
+            any(k in task.lower() for k in ["create new file", "yeni fayl yarat", "delete file", "sil fayl"])
+            and not any(k in task.lower() for k in [
+                "add", "əlavə", "fix", "düzəlt", "implement", "refactor",
+                "edit", "update", "modify", "function", "method", "class",
+                "test", "endpoint", "feature", "bug",
+            ])
+            and len(task) < 80
         )
 
         tool_defs = self.tool_registry.list_tools()
@@ -599,10 +605,9 @@ class AutonomousAgent:
                     f"stdout: {stdout_snip}\nstderr: {stderr_snip}\n"
                 )
 
-                # ── Smart auto-completion ──────────────────────────────────────────
-                # If this was the only tool call in the LLM response AND it succeeded
-                # AND it was a write/create operation → no need for another LLM round trip.
-                # This saves one full LLM call (~57-80s on CPU hardware).
+                # ── Smart auto-completion ──────────────────────────────────
+                # Only auto-complete for truly simple single-write tasks.
+                # MUST verify the file actually exists and was written.
                 _write_tools = {"write_file", "create_file", "patch_file", "replace_text", "insert_text", "delete_text"}
                 if (
                     len(calls) == 1
@@ -610,24 +615,33 @@ class AutonomousAgent:
                     and obs.get("exit_code") == 0
                     and _simple_task
                 ):
-                    path_written = call.args.get("path", "file")
-                    auto_summary = f"Done. Created/updated `{path_written}` successfully."
-                    if files_changed:
-                        self.memory.record_modification(
-                            ", ".join(list(files_changed)[:5]),
-                            "agent_task",
-                            f"Task: {task[:100]}",
+                    path_written = call.args.get("path", "")
+                    # Verify the file actually exists on disk
+                    if path_written:
+                        abs_path = (self.project_root / path_written).resolve()
+                        file_exists = abs_path.exists() and abs_path.stat().st_size > 0
+                    else:
+                        file_exists = bool(obs.get("files_changed") or obs.get("stdout"))
+
+                    if file_exists:
+                        auto_summary = f"Done. Created `{path_written}` successfully."
+                        if files_changed:
+                            self.memory.record_modification(
+                                ", ".join(list(files_changed)[:5]),
+                                "agent_task",
+                                f"Task: {task[:100]}",
+                            )
+                        self._set_state(AgentState.COMPLETED)
+                        self._emit("completed", {"summary": auto_summary, "files_changed": sorted(files_changed)})
+                        default_resource_manager.cleanup_execution(self.execution_id)
+                        return AgentTaskResult(
+                            status=AgentState.COMPLETED, task=task,
+                            summary=auto_summary,
+                            files_changed=sorted(files_changed), tool_history=self.history,
+                            execution_id=self.execution_id,
                         )
-                    self._set_state(AgentState.COMPLETED)
-                    self._emit("completed", {"summary": auto_summary, "files_changed": sorted(files_changed)})
-                    default_resource_manager.cleanup_execution(self.execution_id)
-                    return AgentTaskResult(
-                        status=AgentState.COMPLETED, task=task,
-                        summary=auto_summary,
-                        files_changed=sorted(files_changed), tool_history=self.history,
-                        execution_id=self.execution_id,
-                    )
-                # ──────────────────────────────────────────────────────────────────
+                    # File not verified — fall through and let agent continue
+                # ──────────────────────────────────────────────────────────
 
                 # Self-correction on failures
                 if obs.get("exit_code") != 0 and call.tool in {

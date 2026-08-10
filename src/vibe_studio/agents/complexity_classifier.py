@@ -107,18 +107,21 @@ class ComplexityClassifier:
         # ── FAST heuristics ──────────────────────────────────────────────
         fast_hits = sum(1 for kw in _FAST_KEYWORDS if kw in prompt_lower)
 
+        # Short prompt with any fast keyword → always FAST (active_file optional)
+        if fast_hits >= 1 and word_count <= 10:
+            return TaskComplexity.FAST
+
         # Single explicit file reference + fast keyword → FAST
         if fast_hits >= 1 and active_file:
-            # Check there's only one file mentioned in the prompt
             file_refs = re.findall(r'[\w/\-]+\.\w{1,6}', prompt_lower)
             if len(file_refs) <= 1:
                 return TaskComplexity.FAST
 
-        if fast_hits >= 2 and word_count <= 12:
+        if fast_hits >= 2 and word_count <= 15:
             return TaskComplexity.FAST
 
         # Very short prompts with a known active file
-        if word_count <= 6 and active_file:
+        if word_count <= 8 and active_file:
             return TaskComplexity.FAST
 
         # ── NORMAL (default) ─────────────────────────────────────────────
