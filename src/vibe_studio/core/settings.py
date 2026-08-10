@@ -33,6 +33,10 @@ class AppSettings:
     font_size: int = 12
     chat_history_limit: int = 50
     max_iterations: int = 30
+    tool_timeout_seconds: int = 30
+    llm_timeout_seconds: int = 180
+    agent_task_timeout_seconds: int = 300
+    transactional_auto_rollback: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +48,10 @@ class AppSettings:
             "font_size": self.font_size,
             "chat_history_limit": self.chat_history_limit,
             "max_iterations": self.max_iterations,
+            "tool_timeout_seconds": self.tool_timeout_seconds,
+            "llm_timeout_seconds": self.llm_timeout_seconds,
+            "agent_task_timeout_seconds": self.agent_task_timeout_seconds,
+            "transactional_auto_rollback": self.transactional_auto_rollback,
             "providers": [
                 {
                     "name": p.name,
@@ -74,6 +82,10 @@ class AppSettings:
             font_size=int(data.get("font_size", 12)),
             chat_history_limit=int(data.get("chat_history_limit", 50)),
             max_iterations=int(data.get("max_iterations", 30)),
+            tool_timeout_seconds=int(data.get("tool_timeout_seconds", 30)),
+            llm_timeout_seconds=int(data.get("llm_timeout_seconds", 180)),
+            agent_task_timeout_seconds=int(data.get("agent_task_timeout_seconds", 300)),
+            transactional_auto_rollback=bool(data.get("transactional_auto_rollback", True)),
             providers=[
                 ProviderConfig(
                     name=str(p.get("name", "")),

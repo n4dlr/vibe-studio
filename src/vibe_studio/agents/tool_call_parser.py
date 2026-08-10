@@ -260,6 +260,20 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
                 _add(ParsedToolCall(tool=name, args=args, raw=m.group(0), source="inline_prefix"),
                      m.start(), m.end())
 
+    # 6. Top-level bare JSON response fallback
+    if not calls:
+        top_json = _try_parse_json(text)
+        if isinstance(top_json, dict):
+            name, args = _extract_tool_and_args(top_json)
+            if not name:
+                # Check for single-key dict like {"read_file": {"path": "foo.py"}}
+                for k, v in top_json.items():
+                    if isinstance(k, str) and isinstance(v, dict):
+                        name, args = k, v
+                        break
+            if name:
+                _add(ParsedToolCall(tool=name, args=args, raw=text.strip(), source="bare_json_toplevel"), 0, len(text))
+
     # Sort by position in text (preserves model's intended order)
     calls.sort(key=lambda c: text.find(c.raw))
     return calls

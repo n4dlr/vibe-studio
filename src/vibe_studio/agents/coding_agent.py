@@ -147,6 +147,10 @@ class AutonomousAgent:
         stream_callback: Callable[[str], None] | None = None,
         cancellation_token: Optional[CancellationToken] = None,
         execution_id: Optional[str] = None,
+        tool_timeout_seconds: int = 30,
+        llm_timeout_seconds: int = 180,
+        agent_task_timeout_seconds: int = 300,
+        transactional_auto_rollback: bool = True,
     ):
         self.project_root = Path(project_root).resolve()
         self.provider = provider
@@ -158,6 +162,10 @@ class AutonomousAgent:
         self.stream_callback = stream_callback
         self.cancellation_token = cancellation_token or CancellationToken()
         self.execution_id = execution_id or str(uuid.uuid4())
+        self.tool_timeout_seconds = tool_timeout_seconds
+        self.llm_timeout_seconds = llm_timeout_seconds
+        self.agent_task_timeout_seconds = agent_task_timeout_seconds
+        self.transactional_auto_rollback = transactional_auto_rollback
 
         self.context_engine = ContextEngine(self.project_root)
         self.scanner = ProjectScanner(self.project_root)
@@ -425,8 +433,24 @@ class AutonomousAgent:
         # Loop-detection: track (tool, args_hash) pairs
         recent_calls: list[tuple[str, str]] = []
         iteration = 0
+        task_start_time = time.monotonic()
 
         while iteration < self.max_iterations:
+            # Task hard timeout check
+            if time.monotonic() - task_start_time > self.agent_task_timeout_seconds:
+                default_resource_manager.cleanup_execution(self.execution_id)
+                self._set_state(AgentState.CANCELLED)
+                timeout_summary = f"Task timed out after {int(self.agent_task_timeout_seconds)} seconds."
+                self._emit("task_timeout", {"summary": timeout_summary})
+                return AgentTaskResult(
+                    status=AgentState.CANCELLED,
+                    task=task,
+                    summary=timeout_summary,
+                    files_changed=sorted(files_changed),
+                    tool_history=self.history,
+                    execution_id=self.execution_id,
+                )
+
             if self.is_cancelled():
                 default_resource_manager.cleanup_execution(self.execution_id)
                 self._set_state(AgentState.CANCELLED)
@@ -615,6 +639,16 @@ class AutonomousAgent:
                         category=classify_error(combined_err),
                         message=combined_err[:200],
                     )
+
+                    # Transactional Auto-Rollback if broken patch failed validation
+                    if self.transactional_auto_rollback and self.tool_registry.patch_tools.history:
+                        rollback_res = self.tool_registry.patch_tools.revert_last_change()
+                        if rollback_res.get("exit_code") == 0:
+                            self._emit("auto_rollback", {"reason": primary_error.message[:150]})
+                            current_prompt += (
+                                "\n[TRANSACTIONAL AUTO-ROLLBACK] Validation failed after edits. "
+                                "Automatically reverted broken changes to clean workspace checkpoint.\n"
+                            )
 
                     if self._error_tracker.is_stuck(primary_error):
                         # Already tried this error — stop banging head
