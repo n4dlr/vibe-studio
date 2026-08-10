@@ -50,7 +50,7 @@ class IntentPredictor:
 
         return ["git status", "pytest", "ruff check ."]
 
-    def derive_verification_requirements(self, prompt: str) -> TaskRequirement:
+    def derive_verification_requirements(self, prompt: str, provider: Any = None) -> TaskRequirement:
         """Derive structured TaskRequirement verification plan from natural language prompt."""
         p_lower = prompt.lower().strip()
 
@@ -60,12 +60,11 @@ class IntentPredictor:
         test_reqs: list[TestRequirement] = []
 
         # 1. Extract explicit filenames (e.g., hello.py, main.ts, index.html)
-        file_matches = re.findall(r"[\w/\-]+\.\w{1,6}", prompt)
+        file_matches = re.findall(r"[\w/\-]+\.(?:py|js|ts|tsx|jsx|php|vue|go|rs|c|cpp|h|hpp|java|kt|cs|sh|txt|md|html|css|json|yaml|yml|toml)\b", prompt, re.IGNORECASE)
         for fmatch in file_matches:
-            # Skip if common words like e.g. or vs.
             if fmatch.lower() in ("e.g.", "i.e.", "vs."):
                 continue
-            is_delete = any(k in p_lower for k in ["delete", "sil", "remove", "kaldır"]) and fmatch in p_lower
+            is_delete = any(k in p_lower for k in ["delete", "sil", "remove", "kaldır", "удалить"]) and fmatch.lower() in p_lower
             file_reqs.append(FileRequirement(
                 path=fmatch,
                 must_exist=not is_delete,
@@ -73,19 +72,28 @@ class IntentPredictor:
                 min_size_bytes=1 if not is_delete else 0,
             ))
 
-        # 2. Extract explicit symbol names (e.g. farewell(), class UserProfile, function login)
-        func_matches = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", prompt)
-        for fn in func_matches:
-            if fn.lower() not in {"print", "len", "str", "int", "dict", "list", "set", "tuple", "if", "for", "while"}:
+        # 2. Extract explicit symbol names (e.g. farewell(), def login, class UserProfile, funksiya farewell)
+        func_matches = re.findall(r"\b(?:def|class|function|funksiya|metod|method)\s+([a-zA-Z_][a-zA-Z0-9_]*)", prompt, re.IGNORECASE)
+        paren_matches = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", prompt)
+        combined_syms = list(dict.fromkeys(func_matches + paren_matches))
+
+        skip_words = {
+            "print", "len", "str", "int", "dict", "list", "set", "tuple", "if", "for", "while",
+            "add", "create", "make", "write", "run", "test", "check", "fix", "update", "delete",
+            "yeni", "fayl", "yarat", "yaz", "əlavə", "elave", "et", "işlət", "islet",
+        }
+        for fn in combined_syms:
+            if fn.lower() not in skip_words and len(fn) > 1:
                 target_f = file_matches[0] if file_matches else "main.py"
                 symbol_reqs.append(SymbolRequirement(
                     path=target_f,
                     symbol_name=fn,
-                    symbol_type="function",
+                    symbol_type="any",
                 ))
 
-        # 3. Detect test requirements
-        if any(k in p_lower for k in ["test", "pytest", "unittest", "jest", "vitest"]):
+        # 3. Detect test requirements (multi-lingual)
+        test_keywords = ["test", "pytest", "unittest", "jest", "vitest", "yaz test", "testı işlət", "testləri", "проверь", "тест"]
+        if any(k in p_lower for k in test_keywords):
             test_target = file_matches[0] if file_matches else None
             test_reqs.append(TestRequirement(
                 require_tests_executed=True,

@@ -440,6 +440,19 @@ class AutonomousAgent:
             f"\nPROJECT FILE CONTEXT:\n{context_text}\n"
         )
 
+        # Inject derived verification plan into prompt so LLM is aware of completion criteria
+        task_req = self.intent_predictor.derive_verification_requirements(task, provider=self.provider)
+        req_lines = []
+        if task_req.files:
+            req_lines.append(f"- Files required: {', '.join(f.path for f in task_req.files)}")
+        if task_req.symbols:
+            req_lines.append(f"- Symbols required: {', '.join(s.symbol_name for s in task_req.symbols)}")
+        if task_req.tests:
+            req_lines.append("- Test execution required (e.g. pytest/unittest)")
+
+        if req_lines:
+            current_prompt += "\n[VERIFICATION REQUIREMENTS FOR COMPLETED TASK]:\n" + "\n".join(req_lines) + "\nYou MUST satisfy these verification criteria using tools before completing.\n"
+
         self._set_state(AgentState.EXECUTING)
 
         # Loop-detection: track (tool, args_hash) pairs
@@ -534,6 +547,23 @@ class AutonomousAgent:
                 }
                 final_state = state_map.get(ver_res.status, AgentState.COMPLETED)
                 full_summary = f"{final_summary}\n\n[VERIFICATION RESULT]: {ver_res.summary}"
+
+                # Trigger Self-Repair loop if verification failed and retries remain
+                if not ver_res.is_successful and repair_cycle < self.max_repair_cycles and iteration < self.max_iterations - 1:
+                    repair_cycle += 1
+                    self._set_state(AgentState.FIXING)
+                    failing_checks = [f"  - {c.name}: {c.message}" for c in ver_res.checks if not c.passed]
+                    err_msg = "\n".join(failing_checks) or ver_res.summary
+                    self._emit("self_repair_started", {
+                        "cycle": repair_cycle,
+                        "verification_errors": err_msg,
+                    })
+                    current_prompt += (
+                        f"\n[SYSTEM VERIFICATION FAILURE - SELF-REPAIR ATTEMPT {repair_cycle}/{self.max_repair_cycles}]\n"
+                        f"The task verification pass failed because:\n{err_msg}\n"
+                        f"Please execute tools to resolve these verification failures (e.g. write/modify files, add functions, or run tests).\n"
+                    )
+                    continue
 
                 self._set_state(final_state)
                 self._emit("completed" if final_state in (AgentState.COMPLETED, AgentState.COMPLETED_WITH_WARNINGS) else "verification_failed", {

@@ -2,8 +2,6 @@
 
 An AI-native desktop IDE built on PySide6. The AI agent can autonomously read, search, edit, test, and repair your project — you describe what you want in plain language.
 
-## What it actually does
-
 ```
 User: "Login səhifəsinin backgroundunu dəyiş."
 
@@ -11,15 +9,17 @@ Agent:
   1. Scans project → detects framework/language
   2. Searches for "login" in filenames + symbols
   3. Reads the relevant file(s)
-  4. Plans the minimal change
-  5. Patches the file (conflict-safe)
-  6. Runs validation (tests / lint)
-  7. Self-corrects on failure (up to 3 cycles)
+  4. Plans minimal changes & derives TaskVerificationRequirements
+  5. Patches the file (conflict-safe, atomic)
+  6. TaskVerificationEngine verifies repository state (Filesystem, AST symbols, Syntax, Tests)
+  7. Self-corrects on failure (up to 3 cycles in FIXING state)
   8. Shows diff in Changes panel
-  9. Reports result
+  9. Reports verified status (COMPLETED / COMPLETED_WITH_WARNINGS / PARTIAL / FAILED)
 ```
 
 The user does not need to know the filename, directory, framework, or CSS system.
+
+> **V19 Core Principle:** *«NEVER consider an AI task completed merely because the LLM claims that it completed the task.»* Task completion requires empirical verification of filesystem state, AST symbol existence, syntax compilation, and passing tests.
 
 ---
 
@@ -49,16 +49,42 @@ pip install -e ".[dev]"
 
 ---
 
-## Running
+## CLI Commands & Subcommands
+
+Vibe Studio can be launched in GUI mode or headless CLI mode:
 
 ```bash
+# Launch GUI Application
 python -m vibe_studio
-```
-
-Or if installed as a script:
-
-```bash
+# or
 vibe-studio
+
+# 🩺 Environment & System Diagnostic
+vibe-studio doctor
+
+# 🔍 Run Task Verification Engine against project
+vibe-studio verify "Add farewell(name) to hello.py"
+
+# ⚡ Run Automated Benchmark Suite (VibeBench)
+vibe-studio benchmark --scenarios 5
+
+# 🤖 Headless Task Execution
+vibe-studio run "Add /health POST route to main.py" --root /path/to/project
+
+# 🔍 Build Graph RAG AST Index
+vibe-studio index --root /path/to/project
+
+# 🔎 Natural Language Semantic Code Search
+vibe-studio search "authentication middleware"
+
+# 📚 Auto-generate API Reference & Mermaid Diagrams
+vibe-studio doc
+
+# 🔒 Run Security Auditor
+vibe-studio audit
+
+# 🌐 Start REST API & WebSocket Server
+vibe-studio server --port 8000 --ws-port 8001
 ```
 
 ---
@@ -276,9 +302,10 @@ pytest tests/test_integration.py  # will use running Ollama if available
 
 ## Features
 
+- **Task Verification Engine (V19)**: Deterministic verification pass (`TaskVerificationEngine`) enforcing filesystem, AST symbol, syntax compilation, and test execution requirements. Never accepts LLM completion claims without verification proof.
+- **Self-Repair Verification Loop**: Automatically transitions to `FIXING` state on verification failures; feeds exact failing checks back to LLM to auto-apply patches and re-verify.
 - **Context Engine (Local RAG)**: AST file chunking, SQLite index (`.vibe_studio/index.db`), token budgeting, optional `sentence-transformers` vector search.
 - **Multi-Agent Review**: Parallel candidate proposals via `ThreadPoolExecutor`, diff quality evaluated by `ReviewerAgent`.
-- **Self-Healing Test Loop**: Auto-transitions to `FIXING` state on test failures; tracks traceback fingerprints to avoid infinite loops.
 - **Plugin System (`@vibe_plugin`)**: `PluginManager` loads third-party tools from `.vibe_studio/plugins/` and registers them in `ToolRegistry`.
 - **Local Network Streaming**: Live event streaming and peer IDE activity broadcasting via `APIServerHandler`.
 - **Monorepo Incremental Scanner**: SQLite symbol index with hash-based incremental rescan; skips unchanged files.
