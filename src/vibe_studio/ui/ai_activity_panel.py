@@ -36,11 +36,14 @@ class AIActivityPanel(QWidget):
         "OBSERVING":        ("#34d399", "👁"),
         "VALIDATING":       ("#22d3ee", "✔"),
         "FIXING":           ("#f87171", "🔧"),
-        "REVIEWING":        ("#818cf8", "📝"),
-        "COMPLETED":        ("#4ade80", "✅"),
-        "FAILED":           ("#f87171", "✗"),
-        "CANCELLED":        ("#94a3b8", "⏹"),
-        "BLOCKED":          ("#fb923c", "🚫"),
+        "REVIEWING":               ("#818cf8", "📝"),
+        "VERIFYING":               ("#22d3ee", "🔍"),
+        "COMPLETED":               ("#4ade80", "✅"),
+        "COMPLETED_WITH_WARNINGS": ("#facc15", "⚠️"),
+        "PARTIAL":                 ("#fb923c", "🌗"),
+        "FAILED":                  ("#f87171", "✗"),
+        "CANCELLED":               ("#94a3b8", "⏹"),
+        "BLOCKED":                 ("#fb923c", "🚫"),
     }
 
     def __init__(self, parent=None):

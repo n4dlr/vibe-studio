@@ -1,9 +1,18 @@
-"""IntentPredictor — command history tracker and next-step command completion generator."""
+"""IntentPredictor — command history tracker, next-step completion, and task verification plan derivation."""
 from __future__ import annotations
+
+import re
+from vibe_studio.agents.task_verifier import (
+    BehaviorRequirement,
+    FileRequirement,
+    SymbolRequirement,
+    TaskRequirement,
+    TestRequirement,
+)
 
 
 class IntentPredictor:
-    """Predicts next probable user actions and commands based on history and project state."""
+    """Predicts next probable user actions and derives verification plans from user task prompts."""
 
     SUGGESTION_MAP: dict[str, list[str]] = {
         "npm install": ["npm start", "npm test", "npm run dev", "npm run build"],
@@ -40,3 +49,64 @@ class IntentPredictor:
                     return suggestions
 
         return ["git status", "pytest", "ruff check ."]
+
+    def derive_verification_requirements(self, prompt: str) -> TaskRequirement:
+        """Derive structured TaskRequirement verification plan from natural language prompt."""
+        p_lower = prompt.lower().strip()
+
+        file_reqs: list[FileRequirement] = []
+        symbol_reqs: list[SymbolRequirement] = []
+        behavior_reqs: list[BehaviorRequirement] = []
+        test_reqs: list[TestRequirement] = []
+
+        # 1. Extract explicit filenames (e.g., hello.py, main.ts, index.html)
+        file_matches = re.findall(r"[\w/\-]+\.\w{1,6}", prompt)
+        for fmatch in file_matches:
+            # Skip if common words like e.g. or vs.
+            if fmatch.lower() in ("e.g.", "i.e.", "vs."):
+                continue
+            is_delete = any(k in p_lower for k in ["delete", "sil", "remove", "kaldır"]) and fmatch in p_lower
+            file_reqs.append(FileRequirement(
+                path=fmatch,
+                must_exist=not is_delete,
+                must_not_exist=is_delete,
+                min_size_bytes=1 if not is_delete else 0,
+            ))
+
+        # 2. Extract explicit symbol names (e.g. farewell(), class UserProfile, function login)
+        func_matches = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", prompt)
+        for fn in func_matches:
+            if fn.lower() not in {"print", "len", "str", "int", "dict", "list", "set", "tuple", "if", "for", "while"}:
+                target_f = file_matches[0] if file_matches else "main.py"
+                symbol_reqs.append(SymbolRequirement(
+                    path=target_f,
+                    symbol_name=fn,
+                    symbol_type="function",
+                ))
+
+        # 3. Detect test requirements
+        if any(k in p_lower for k in ["test", "pytest", "unittest", "jest", "vitest"]):
+            test_target = file_matches[0] if file_matches else None
+            test_reqs.append(TestRequirement(
+                require_tests_executed=True,
+                target_path=test_target,
+            ))
+
+        # 4. Content behavior patterns if strings specified (e.g., returning "Goodbye " + name)
+        str_quotes = re.findall(r'["\']([^"\']+)["\']', prompt)
+        for sq in str_quotes:
+            if len(sq) > 2 and file_matches:
+                behavior_reqs.append(BehaviorRequirement(
+                    description=f"Content contains string '{sq}'",
+                    check_type="contains",
+                    pattern_or_code=sq,
+                    target_file=file_matches[0],
+                ))
+
+        return TaskRequirement(
+            prompt=prompt,
+            files=file_reqs,
+            symbols=symbol_reqs,
+            behaviors=behavior_reqs,
+            tests=test_reqs,
+        )

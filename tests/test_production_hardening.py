@@ -524,8 +524,8 @@ class TestAgentErrorDedup:
 
         agent._fallback_deterministic_step = bad_fallback
         result = agent.run("run tests and fix everything")
-        # Should complete, not loop forever
-        assert result.status == AgentState.COMPLETED
+        # Should terminate (FAILED/BLOCKED due to failing tests), not loop forever
+        assert result.status in (AgentState.FAILED, AgentState.BLOCKED, AgentState.COMPLETED)
         assert call_count["n"] <= 10
 
     def test_error_tracker_prevents_infinite_repair(self, tmp_path):

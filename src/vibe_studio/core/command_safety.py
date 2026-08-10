@@ -235,11 +235,20 @@ class CommandSafety:
             from vibe_studio.core.resource_manager import default_resource_manager
 
             # Create Popen directly with process group on Posix so process tree can be killed cleanly
+            import shlex
             start_new_session = os.name != "nt"
+            
+            # Use shell=False unless shell metacharacters are explicitly required
+            shell_needed = isinstance(command, str) and any(m in command for m in ("|", ">", "<", "&&", ";", "||"))
+            if isinstance(command, str) and not shell_needed:
+                cmd_args: str | list[str] = shlex.split(command)
+            else:
+                cmd_args = command
+
             proc = subprocess.Popen(
-                command,
+                cmd_args,
                 cwd=str(work_dir),
-                shell=True,
+                shell=shell_needed,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

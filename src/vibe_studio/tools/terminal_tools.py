@@ -94,10 +94,49 @@ class TerminalTools:
             cmd = "cargo test"
         elif (root / "go.mod").exists():
             cmd = "go test ./..."
+        elif list(root.glob("test_*.py")) or list(root.glob("*_test.py")):
+            target_str = f" {test_path}" if test_path else ""
+            cmd = f"{self._get_pytest_cmd()}{target_str}"
         else:
-            cmd = f"{self._get_pytest_cmd()}"
+            target_str = f" {test_path}" if test_path else ""
+            cmd = f"{self._get_pytest_cmd()}{target_str}"
 
-        return self.execute_command(cmd, timeout=timeout)
+        res = self.execute_command(cmd, timeout=timeout)
+        
+        # Parse test metrics from stdout/stderr
+        stdout = res.get("stdout", "")
+        stderr = res.get("stderr", "")
+        combined = (stdout + "\n" + stderr).lower()
+
+        tests_executed = 0
+        tests_passed = 0
+        tests_failed = 0
+
+        import re
+        # Pytest pattern: "382 passed, 4 skipped in 21.19s" or "1 failed, 25 passed"
+        pytest_match = re.search(r"(\d+)\s+passed", combined)
+        if pytest_match:
+            tests_passed = int(pytest_match.group(1))
+
+        fail_match = re.search(r"(\d+)\s+failed", combined)
+        if fail_match:
+            tests_failed = int(fail_match.group(1))
+
+        tests_executed = tests_passed + tests_failed
+
+        # Detect 0 tests executed
+        no_tests = (
+            tests_executed == 0
+            and ("no tests ran" in combined or "collected 0 items" in combined or "0 items collected" in combined or "no tests found" in combined)
+        )
+        if no_tests:
+            res["no_tests_executed"] = True
+            res["stderr"] = (res.get("stderr", "") + "\nWARNING: Zero tests were discovered or executed.").strip()
+
+        res["tests_executed"] = tests_executed
+        res["tests_passed"] = tests_passed
+        res["tests_failed"] = tests_failed
+        return res
 
     def run_linter(self, path: str = ".", timeout: int = 60) -> dict[str, Any]:
         root = self.workspace_root

@@ -105,6 +105,7 @@ export OPENAI_BASE_URL=https://api.openai.com/v1   # optional
 vibe_studio/
 ├── agents/
 │   ├── coding_agent.py        # AutonomousAgent — state machine, tool loop, self-correction
+│   ├── task_verifier.py       # TaskVerificationEngine — deterministic post-task verification
 │   ├── tool_call_parser.py    # Multi-format parser: JSON/fenced/XML/OpenAI fn-call
 │   └── output_processor.py   # Output truncation, error classification, deduplication
 ├── ai/

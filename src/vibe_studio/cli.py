@@ -90,6 +90,17 @@ def main(argv: list[str] | None = None) -> int:
     w_parser.add_argument("--port", type=int, default=9100)
     w_parser.add_argument("--coordinator", type=str, default="http://127.0.0.1:9000")
 
+    # --- Subcommand: doctor ---
+    subparsers.add_parser("doctor", help="Diagnose environment, Ollama, dependencies, LSP, workspace & index")
+
+    # --- Subcommand: verify ---
+    verify_parser = subparsers.add_parser("verify", help="Run TaskVerificationEngine against workspace for a task prompt")
+    verify_parser.add_argument("prompt", type=str, help="Task prompt or verification requirement")
+
+    # --- Subcommand: benchmark ---
+    bench_parser = subparsers.add_parser("benchmark", help="Run VibeBench automated benchmark suite")
+    bench_parser.add_argument("--scenarios", type=int, default=None, help="Max scenarios to run")
+
     args = parser.parse_args(argv)
 
     if not args.subcommand:
@@ -204,6 +215,97 @@ def main(argv: list[str] | None = None) -> int:
             except KeyboardInterrupt:
                 worker.stop()
         return 0
+
+    elif args.subcommand == "doctor":
+        import shutil, sys
+        print("=================================================================")
+        print("                   VIBE STUDIO DOCTOR DIAGNOSTIC                 ")
+        print("=================================================================")
+        print(f"Python Version:       {sys.version.split()[0]} ({sys.platform})")
+        print(f"Workspace Root:       {root}")
+
+        # Module checks
+        modules = [
+            ("PySide6 (GUI)", "PySide6"),
+            ("requests (HTTP)", "requests"),
+            ("httpx (Async HTTP)", "httpx"),
+            ("pytest (Testing)", "pytest"),
+            ("playwright (Browser)", "playwright"),
+            ("sentence-transformers (RAG)", "sentence_transformers"),
+            ("networkx (Graph)", "networkx"),
+            ("fastapi (Web API)", "fastapi"),
+            ("cryptography (Security)", "cryptography"),
+        ]
+        print("\n--- Dependencies ---")
+        for label, mod in modules:
+            try:
+                __import__(mod)
+                print(f"  ✓ {label:<32}: Installed")
+            except ImportError:
+                print(f"  ✗ {label:<32}: Not Installed (optional)")
+
+        # Ollama check
+        print("\n--- Ollama Local LLM Server ---")
+        try:
+            import requests as req
+            resp = req.get("http://localhost:11434/api/tags", timeout=2)
+            if resp.status_code == 200:
+                models = [m.get("name") for m in resp.json().get("models", [])]
+                print(f"  ✓ Ollama Running: {len(models)} model(s) available")
+                for m in models[:5]:
+                    print(f"    - {m}")
+            else:
+                print(f"  ⚠ Ollama status code: {resp.status_code}")
+        except Exception as exc:
+            print(f"  ✗ Ollama unreachable on localhost:11434 ({exc})")
+
+        # LSP Check
+        print("\n--- LSP Language Servers in PATH ---")
+        lsp_bins = ["pyright", "pylsp", "typescript-language-server", "gopls", "rust-analyzer", "clangd"]
+        for b in lsp_bins:
+            p = shutil.which(b)
+            if p:
+                print(f"  ✓ {b:<28}: Found ({p})")
+            else:
+                print(f"  - {b:<28}: Not found")
+
+        # Workspace & Index
+        print("\n--- Workspace Index Status ---")
+        index_db = root / ".vibe_studio" / "index.db"
+        if index_db.exists():
+            print(f"  ✓ AST SQLite Index present: {index_db} ({index_db.stat().st_size} bytes)")
+        else:
+            print(f"  - Index not built yet. Run: vibe-studio index")
+
+        print("=================================================================")
+        return 0
+
+    elif args.subcommand == "verify":
+        from vibe_studio.agents.intent_predictor import IntentPredictor
+        from vibe_studio.agents.task_verifier import TaskVerificationEngine
+
+        print(f"🔍 [Task Verification Engine] Verifying task requirements for: '{args.prompt}'")
+        predictor = IntentPredictor()
+        req = predictor.derive_verification_requirements(args.prompt)
+        
+        verifier = TaskVerificationEngine(workspace_root=root)
+        result = verifier.verify(req)
+
+        print("\n" + result.summary)
+        for c in result.checks:
+            icon = "✓" if c.passed else "✗"
+            print(f"  {icon} [{c.check_type.upper()}] {c.name}: {c.message}")
+
+        return 0 if result.is_successful else 1
+
+    elif args.subcommand == "benchmark":
+        from vibe_studio.benchmark.vibe_bench import VibeBenchEngine
+
+        print(f"⚡ [VibeBench] Starting automated evaluation suite...")
+        engine = VibeBenchEngine()
+        report = engine.run_benchmark(max_scenarios=args.scenarios)
+        print("\n" + report.print_dashboard())
+        return 0 if report.success_rate_pct >= 80.0 else 1
 
     return 0
 

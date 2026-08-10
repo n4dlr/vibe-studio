@@ -32,4 +32,6 @@ class GitService:
         return self._run("git branch --list").stdout
 
     def _run(self, command: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(command, cwd=str(self.repo_root), shell=True, capture_output=True, text=True, check=False)
+        import shlex
+        args = shlex.split(command) if isinstance(command, str) else command
+        return subprocess.run(args, cwd=str(self.repo_root), shell=False, capture_output=True, text=True, check=False)

@@ -125,14 +125,22 @@ class VibeBenchEngine:
             result = agent.run(scenario.prompt)
             duration = time.time() - start_time
 
-            # Run verification command
+            # Run verification command & TaskVerificationEngine
             cmd_res = CommandSafety.run(
                 scenario.verification_cmd,
                 cwd=tmp_dir,
                 workspace_root=tmp_dir,
                 timeout=30,
             )
-            passed = (cmd_res.exit_code == 0)
+            
+            from vibe_studio.agents.intent_predictor import IntentPredictor
+            from vibe_studio.agents.task_verifier import TaskVerificationEngine
+            
+            verifier = TaskVerificationEngine(tmp_dir)
+            req = IntentPredictor().derive_verification_requirements(scenario.prompt)
+            ver_res = verifier.verify(req, reported_files_changed=result.files_changed, test_result={"exit_code": cmd_res.exit_code, "stdout": cmd_res.stdout, "stderr": cmd_res.stderr})
+
+            passed = (cmd_res.exit_code == 0) and ver_res.is_successful
             iters = len(result.tool_history) or 1
             first_pass = passed and (iters <= 2)
             self_repair = passed and (iters > 2)
