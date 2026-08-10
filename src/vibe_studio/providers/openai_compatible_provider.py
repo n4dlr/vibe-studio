@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from typing import Any, Callable, Optional
@@ -11,6 +12,9 @@ from urllib.request import Request, urlopen
 from vibe_studio.core.cancellation import CancellationToken
 from vibe_studio.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenException
 from vibe_studio.providers.base import ModelInfo, ProviderError
+from vibe_studio.providers.stream_events import StreamEvent
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleProvider:
@@ -23,10 +27,11 @@ class OpenAICompatibleProvider:
         timeout: int = 120,
     ):
         self.base_url = base_url.rstrip("/")
-        # Accept key from constructor or env var
         self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("CUSTOM_API_KEY") or ""
         self.timeout = timeout
         self._cancel_event = threading.Event()
+        self._active_resp: Any = None
+        self._resp_lock = threading.Lock()
         self.circuit_breaker = CircuitBreaker(name="openai_compatible")
 
     # ------------------------------------------------------------------
@@ -62,14 +67,30 @@ class OpenAICompatibleProvider:
             return False
 
     # ------------------------------------------------------------------
-    # Cancellation
+    # Cancellation — idempotent, propagates via socket abort
     # ------------------------------------------------------------------
 
     def cancel(self) -> None:
         self._cancel_event.set()
+        with self._resp_lock:
+            resp = self._active_resp
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
 
     def _reset_cancel(self) -> None:
         self._cancel_event.clear()
+        with self._resp_lock:
+            self._active_resp = None
+
+    def _is_cancelled(self, cancellation_token: Optional[CancellationToken]) -> bool:
+        if self._cancel_event.is_set():
+            return True
+        if cancellation_token and cancellation_token.is_cancelled():
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Core generation
@@ -83,6 +104,7 @@ class OpenAICompatibleProvider:
         system_prompt: str | None = None,
         stream: bool = False,
         callback: Callable[[str], None] | None = None,
+        event_callback: Callable[[StreamEvent], None] | None = None,
         cancellation_token: Optional[CancellationToken] = None,
         temperature: float = 0.2,
         max_tokens: int = 4096,
@@ -102,6 +124,7 @@ class OpenAICompatibleProvider:
             model=model,
             stream=stream,
             callback=callback,
+            event_callback=event_callback,
             cancellation_token=cancellation_token,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -115,12 +138,16 @@ class OpenAICompatibleProvider:
         model: str,
         stream: bool = False,
         callback: Callable[[str], None] | None = None,
+        event_callback: Callable[[StreamEvent], None] | None = None,
         cancellation_token: Optional[CancellationToken] = None,
         temperature: float = 0.2,
         max_tokens: int = 4096,
         **kwargs: Any,
     ) -> str:
         self._reset_cancel()
+
+        if cancellation_token is not None:
+            cancellation_token.register_callback(self.cancel)
 
         def _do_chat():
             payload: dict[str, Any] = {
@@ -144,9 +171,9 @@ class OpenAICompatibleProvider:
 
             try:
                 if stream and callback:
-                    return self._stream_chat(req, callback, timeout, cancellation_token)
+                    return self._stream_chat(req, callback, event_callback, timeout, cancellation_token)
                 with urlopen(req, timeout=timeout) as resp:
-                    body = resp.read().decode("utf-8")
+                    body = resp.read().decode("utf-8", errors="replace")
                 result = json.loads(body)
                 choices = result.get("choices", [])
                 if choices:
@@ -163,27 +190,45 @@ class OpenAICompatibleProvider:
         self,
         req: Request,
         callback: Callable[[str], None],
+        event_callback: Callable[[StreamEvent], None] | None,
         timeout: int,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> str:
         chunks: list[str] = []
-        with urlopen(req, timeout=timeout) as resp:
-            for raw_line in resp:
-                if self._cancel_event.is_set() or (cancellation_token and cancellation_token.is_cancelled()):
-                    break
-                line = raw_line.decode("utf-8").strip()
-                if not line or not line.startswith("data: "):
-                    continue
-                data_str = line[6:]
-                if data_str == "[DONE]":
-                    break
-                try:
-                    data = json.loads(data_str)
-                except Exception:
-                    continue
-                delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                if delta:
-                    chunks.append(delta)
-                    callback(delta)
+        try:
+            resp = urlopen(req, timeout=timeout)
+            with self._resp_lock:
+                self._active_resp = resp
+            with resp:
+                for raw_line in resp:
+                    if self._is_cancelled(cancellation_token):
+                        if event_callback:
+                            event_callback(StreamEvent.cancelled())
+                        break
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str == "[DONE]":
+                        if event_callback:
+                            event_callback(StreamEvent.complete("".join(chunks)))
+                        break
+                    try:
+                        data = json.loads(data_str)
+                    except (json.JSONDecodeError, ValueError):
+                        logger.debug("OpenAI provider: skipping malformed SSE chunk: %r", data_str[:80])
+                        continue
+                    delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if delta:
+                        chunks.append(delta)
+                        callback(delta)
+                        if event_callback:
+                            event_callback(StreamEvent.token(delta))
+        except OSError:
+            if event_callback:
+                event_callback(StreamEvent.cancelled("Stream closed"))
+        finally:
+            with self._resp_lock:
+                self._active_resp = None
         return "".join(chunks)
 

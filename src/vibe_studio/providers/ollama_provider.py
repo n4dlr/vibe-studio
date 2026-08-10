@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from typing import Any, Callable, Optional
 from urllib.error import HTTPError, URLError
@@ -10,6 +11,9 @@ from urllib.request import Request, urlopen
 from vibe_studio.core.cancellation import CancellationToken
 from vibe_studio.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenException
 from vibe_studio.providers.base import ModelInfo, ProviderError
+from vibe_studio.providers.stream_events import StreamEvent
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaProvider:
@@ -20,6 +24,8 @@ class OllamaProvider:
         self.timeout = timeout
         self._num_ctx = num_ctx
         self._cancel_event = threading.Event()
+        self._active_resp: Any = None  # holds open HTTP response for socket abort
+        self._resp_lock = threading.Lock()
         self.circuit_breaker = CircuitBreaker(name="ollama")
 
     # ------------------------------------------------------------------
@@ -54,14 +60,30 @@ class OllamaProvider:
             return False
 
     # ------------------------------------------------------------------
-    # Cancellation
+    # Cancellation — idempotent and propagates via socket abort
     # ------------------------------------------------------------------
 
     def cancel(self) -> None:
         self._cancel_event.set()
+        with self._resp_lock:
+            resp = self._active_resp
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
 
     def _reset_cancel(self) -> None:
         self._cancel_event.clear()
+        with self._resp_lock:
+            self._active_resp = None
+
+    def _is_cancelled(self, cancellation_token: Optional[CancellationToken]) -> bool:
+        if self._cancel_event.is_set():
+            return True
+        if cancellation_token and cancellation_token.is_cancelled():
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Generation — non-streaming and streaming
@@ -75,6 +97,7 @@ class OllamaProvider:
         system_prompt: str | None = None,
         stream: bool = False,
         callback: Callable[[str], None] | None = None,
+        event_callback: Callable[[StreamEvent], None] | None = None,
         cancellation_token: Optional[CancellationToken] = None,
         temperature: float = 0.2,
         top_p: float = 0.9,
@@ -82,6 +105,10 @@ class OllamaProvider:
     ) -> str:
         self._reset_cancel()
         model = self._resolve_model(model)
+
+        # Register socket abort callback on CancellationToken
+        if cancellation_token is not None:
+            cancellation_token.register_callback(self.cancel)
 
         def _do_generate():
             payload: dict[str, Any] = {
@@ -109,9 +136,9 @@ class OllamaProvider:
 
             try:
                 if stream and callback:
-                    return self._stream_generate(req, callback, timeout, cancellation_token)
+                    return self._stream_generate(req, callback, event_callback, timeout, cancellation_token)
                 with urlopen(req, timeout=timeout) as resp:
-                    body = resp.read().decode("utf-8")
+                    body = resp.read().decode("utf-8", errors="replace")
                 return json.loads(body).get("response", "")
             except (HTTPError, URLError, TimeoutError) as exc:
                 raise ProviderError(f"Ollama generate failed: {exc}") from exc
@@ -124,27 +151,46 @@ class OllamaProvider:
         self,
         req: Request,
         callback: Callable[[str], None],
+        event_callback: Callable[[StreamEvent], None] | None,
         timeout: int,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> str:
         chunks: list[str] = []
-        with urlopen(req, timeout=timeout) as resp:
-            for raw_line in resp:
-                if self._cancel_event.is_set() or (cancellation_token and cancellation_token.is_cancelled()):
-                    break
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                try:
-                    data = json.loads(raw_line.decode("utf-8"))
-                except Exception:
-                    continue
-                chunk = data.get("response", "")
-                if chunk:
-                    chunks.append(chunk)
-                    callback(chunk)
-                if data.get("done"):
-                    break
+        try:
+            resp = urlopen(req, timeout=timeout)
+            with self._resp_lock:
+                self._active_resp = resp
+            with resp:
+                for raw_line in resp:
+                    if self._is_cancelled(cancellation_token):
+                        if event_callback:
+                            event_callback(StreamEvent.cancelled())
+                        break
+                    raw_line = raw_line.strip()
+                    if not raw_line:
+                        continue
+                    try:
+                        data = json.loads(raw_line.decode("utf-8", errors="replace"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        logger.debug("Ollama: skipping malformed chunk: %r", raw_line[:80])
+                        continue
+                    chunk = data.get("response", "")
+                    if chunk:
+                        chunks.append(chunk)
+                        callback(chunk)
+                        if event_callback:
+                            event_callback(StreamEvent.token(chunk))
+                    if data.get("done"):
+                        if event_callback:
+                            event_callback(StreamEvent.complete("".join(chunks)))
+                        break
+        except OSError:
+            # Socket closed — cancelled or connection lost
+            if event_callback:
+                event_callback(StreamEvent.cancelled("Stream closed"))
+        finally:
+            with self._resp_lock:
+                self._active_resp = None
         return "".join(chunks)
 
     # ------------------------------------------------------------------
@@ -158,12 +204,16 @@ class OllamaProvider:
         model: str,
         stream: bool = False,
         callback: Callable[[str], None] | None = None,
+        event_callback: Callable[[StreamEvent], None] | None = None,
         cancellation_token: Optional[CancellationToken] = None,
         temperature: float = 0.2,
         **kwargs: Any,
     ) -> str:
         self._reset_cancel()
         model = self._resolve_model(model)
+
+        if cancellation_token is not None:
+            cancellation_token.register_callback(self.cancel)
 
         def _do_chat():
             payload: dict[str, Any] = {
@@ -186,9 +236,9 @@ class OllamaProvider:
 
             try:
                 if stream and callback:
-                    return self._stream_chat(req, callback, timeout, cancellation_token)
+                    return self._stream_chat(req, callback, event_callback, timeout, cancellation_token)
                 with urlopen(req, timeout=timeout) as resp:
-                    body = resp.read().decode("utf-8")
+                    body = resp.read().decode("utf-8", errors="replace")
                 result = json.loads(body)
                 return result.get("message", {}).get("content", "")
             except (HTTPError, URLError, TimeoutError) as exc:
@@ -202,27 +252,45 @@ class OllamaProvider:
         self,
         req: Request,
         callback: Callable[[str], None],
+        event_callback: Callable[[StreamEvent], None] | None,
         timeout: int,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> str:
         chunks: list[str] = []
-        with urlopen(req, timeout=timeout) as resp:
-            for raw_line in resp:
-                if self._cancel_event.is_set() or (cancellation_token and cancellation_token.is_cancelled()):
-                    break
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                try:
-                    data = json.loads(raw_line.decode("utf-8"))
-                except Exception:
-                    continue
-                chunk = data.get("message", {}).get("content", "")
-                if chunk:
-                    chunks.append(chunk)
-                    callback(chunk)
-                if data.get("done"):
-                    break
+        try:
+            resp = urlopen(req, timeout=timeout)
+            with self._resp_lock:
+                self._active_resp = resp
+            with resp:
+                for raw_line in resp:
+                    if self._is_cancelled(cancellation_token):
+                        if event_callback:
+                            event_callback(StreamEvent.cancelled())
+                        break
+                    raw_line = raw_line.strip()
+                    if not raw_line:
+                        continue
+                    try:
+                        data = json.loads(raw_line.decode("utf-8", errors="replace"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        logger.debug("Ollama chat: skipping malformed chunk: %r", raw_line[:80])
+                        continue
+                    chunk = data.get("message", {}).get("content", "")
+                    if chunk:
+                        chunks.append(chunk)
+                        callback(chunk)
+                        if event_callback:
+                            event_callback(StreamEvent.token(chunk))
+                    if data.get("done"):
+                        if event_callback:
+                            event_callback(StreamEvent.complete("".join(chunks)))
+                        break
+        except OSError:
+            if event_callback:
+                event_callback(StreamEvent.cancelled("Stream closed"))
+        finally:
+            with self._resp_lock:
+                self._active_resp = None
         return "".join(chunks)
 
     # ------------------------------------------------------------------
@@ -242,4 +310,3 @@ class OllamaProvider:
                 if preference in m.lower():
                     return m
         return available[0]
-
