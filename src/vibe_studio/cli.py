@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     run_parser = subparsers.add_parser("run", help="Run an autonomous agent task in headless CLI mode")
     run_parser.add_argument("prompt", type=str, help="Task prompt for the agent")
     run_parser.add_argument("--file", type=str, default=None, help="Active file path hint")
+    run_parser.add_argument("--model", type=str, default="qwen2.5-coder:14b", help="LLM model name")
+    run_parser.add_argument("--provider", type=str, default="ollama", help="LLM provider name (ollama, openai, etc.)")
+    run_parser.add_argument("--max-iterations", type=int, default=50, help="Max loop iterations")
 
     # --- Subcommand: server ---
     server_parser = subparsers.add_parser("server", help="Start REST API & Web UI HTTP server")
@@ -110,11 +113,23 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(getattr(args, "root", ".")).resolve()
 
     if args.subcommand == "run":
-        print(f"🤖 [Vibe Studio CLI] Running task: {args.prompt}")
-        orch = AgentOrchestrator(workspace_root=root)
+        print(f"🤖 [Vibe Studio CLI] Running task with model '{args.model}' (provider: {args.provider}) on root: {root}")
+        if args.provider == "ollama":
+            from vibe_studio.providers.ollama_provider import OllamaProvider
+            provider = OllamaProvider()
+        else:
+            provider = None
+
+        orch = AgentOrchestrator(
+            workspace_root=root,
+            provider=provider,
+            model=args.model,
+            max_iterations=args.max_iterations,
+        )
         res = orch.execute_task(prompt=args.prompt, active_file=args.file)
         print("\n" + res.summary)
-        return 0 if (res.execution_result and res.execution_result.status.value == "completed") else 1
+        status_val = res.execution_result.status.value if res.execution_result else ""
+        return 0 if status_val in ("completed", "completed_with_warnings") else 1
 
     elif args.subcommand == "server":
         print(f"🌌 [Vibe Studio 5.0 Omniverse] Starting Web UI & REST API at http://{args.host}:{args.port}")
