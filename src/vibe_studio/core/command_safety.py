@@ -4,12 +4,14 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from vibe_studio.security.path_security import PathSecurity, PathSecurityError
 
@@ -104,6 +106,23 @@ def _match_any(patterns: list[str], command: str) -> str | None:
     return None
 
 
+def _kill_proc_tree(proc: subprocess.Popen[Any]) -> None:
+    """Safely terminate a subprocess and its process group if available."""
+    try:
+        if os.name != "nt":
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                time.sleep(0.05)
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
+        else:
+            proc.kill()
+    except Exception:
+        pass
+
+
 class CommandSafety:
     """Risk-stratified command execution engine with workspace sandboxing."""
 
@@ -180,6 +199,7 @@ class CommandSafety:
         timeout: int = 60,
         execution_id: str | None = None,
         cancellation_token: Any = None,
+        max_output_bytes: int = 2_000_000,
     ) -> CommandResult:
         work_dir = Path(cwd or Path.cwd()).resolve()
         if workspace_root:
@@ -234,11 +254,7 @@ class CommandSafety:
         try:
             from vibe_studio.core.resource_manager import default_resource_manager
 
-            # Create Popen directly with process group on Posix so process tree can be killed cleanly
-            import shlex
             start_new_session = os.name != "nt"
-            
-            # Use shell=False unless shell metacharacters are explicitly required
             shell_needed = isinstance(command, str) and any(m in command for m in ("|", ">", "<", "&&", ";", "||"))
             if isinstance(command, str) and not shell_needed:
                 cmd_args: str | list[str] = shlex.split(command)
@@ -258,19 +274,18 @@ class CommandSafety:
             if execution_id:
                 default_resource_manager.register_subprocess(execution_id, proc)
 
+            unreg_cancel = None
+            if cancellation_token is not None:
+                unreg_cancel = cancellation_token.register_callback(lambda: _kill_proc_tree(proc))
+
             try:
-                # Wait with timeout polling to support fast cancellation check
-                poll_interval = 0.2
+                poll_interval = 0.1
                 elapsed = 0.0
                 stdout_data, stderr_data = "", ""
 
                 while True:
                     if cancellation_token and cancellation_token.is_cancelled():
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=1.0)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
+                        _kill_proc_tree(proc)
                         return CommandResult(
                             command=command,
                             arguments=_safe_split(command),
@@ -286,20 +301,23 @@ class CommandSafety:
 
                     try:
                         out, err = proc.communicate(timeout=poll_interval)
-                        stdout_data, stderr_data = out, err
+                        stdout_data, stderr_data = out or "", err or ""
                         break
                     except subprocess.TimeoutExpired:
                         elapsed += poll_interval
                         if elapsed >= timeout:
-                            proc.kill()
-                            out, err = proc.communicate()
+                            _kill_proc_tree(proc)
+                            try:
+                                out, err = proc.communicate(timeout=0.5)
+                            except Exception:
+                                out, err = "", ""
                             return CommandResult(
                                 command=command,
                                 arguments=_safe_split(command),
                                 working_directory=str(work_dir),
                                 exit_code=-1,
-                                stdout=out or "",
-                                stderr=f"{err or ''}\nCommand timed out after {timeout}s.",
+                                stdout=(out or "")[:max_output_bytes],
+                                stderr=f"{(err or '')[:max_output_bytes]}\nCommand timed out after {timeout}s.",
                                 duration=time.monotonic() - started,
                                 timestamp=datetime.now(timezone.utc).isoformat(),
                                 cancelled=True,
@@ -311,16 +329,17 @@ class CommandSafety:
                     command=command,
                     arguments=_safe_split(command),
                     working_directory=str(work_dir),
-                    exit_code=proc.returncode,
-                    stdout=stdout_data,
-                    stderr=stderr_data,
+                    exit_code=proc.returncode if proc.returncode is not None else 0,
+                    stdout=stdout_data[:max_output_bytes],
+                    stderr=stderr_data[:max_output_bytes],
                     duration=elapsed,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                     risk_level=assessment.risk_level.value,
                 )
 
             finally:
-                pass
+                if unreg_cancel:
+                    unreg_cancel()
 
         except Exception as exc:
             elapsed = time.monotonic() - started

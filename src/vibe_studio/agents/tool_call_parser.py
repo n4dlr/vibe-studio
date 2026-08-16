@@ -1,14 +1,15 @@
 """
-Robust tool-call parser.
+Robust tool-call parser and schema recovery engine.
 
 Handles every format a model might emit:
-  1. Fenced JSON block:   ```json\n{"tool": "...", "args": {...}}\n```
-  2. Bare JSON object:    {"tool": "...", "args": {...}}
+  1. Fenced JSON blocks:  ```json\n{"tool": "...", "args": {...}}\n```
+  2. Bare JSON objects:   {"tool": "...", "args": {...}}
   3. XML-style:           <tool_call><name>...</name><args>...</args></tool_call>
   4. OpenAI function-call: {"name": "...", "arguments": {...}}
-  5. Multiple tool calls in one response (sequential or interleaved with prose)
-  6. Malformed/truncated JSON — attempts bracket-balancing recovery
-  7. Schema validation against registered tool definitions
+  5. Python dict syntax:  {'tool': '...', 'args': {...}}
+  6. Multiple tool calls in one response (sequential or interleaved with prose)
+  7. Malformed/truncated JSON — progressive recovery (bracket-balancing, trailing comma fixes, unquoted keys)
+  8. Schema validation against registered tool definitions with structured feedback
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ class ParsedToolCall:
     tool: str
     args: dict[str, Any]
     raw: str          # the matched substring that was parsed
-    source: str       # how it was parsed: "fenced_json" | "bare_json" | "xml" | "openai_fn" | "recovered"
+    source: str       # how it was parsed: "fenced_json" | "bare_json" | "xml" | "openai_fn" | "python_dict" | "recovered"
 
 
 # ---------------------------------------------------------------------------
@@ -42,36 +43,97 @@ _XML_CALL_ALT = re.compile(
     r"<tool_call>\s*<name>([\w_]+)</name>\s*<args>([\s\S]*?)</args>\s*</tool_call>",
     re.IGNORECASE | re.DOTALL,
 )
-# Bare JSON with "tool" key — allows one level of nesting (args object)
+# Bare JSON with "tool" key — allows arbitrary nesting
 _BARE_JSON_TOOL = re.compile(
-    r'(\{(?:[^{}]|\{[^{}]*\})*"tool"\s*:\s*"[^"]+"(?:[^{}]|\{[^{}]*\})*\})',
+    r'(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*"tool"\s*:\s*"[^"]+"(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})',
     re.DOTALL,
 )
 # OpenAI function-calling response schema
-_OPENAI_FN = re.compile(r'(\{\s*"name"\s*:\s*"[\w_]+"\s*,\s*"arguments"\s*:\s*\{[\s\S]*?\})', re.DOTALL)
+_OPENAI_FN = re.compile(
+    r'(\{\s*"name"\s*:\s*"[\w_]+"\s*,\s*"arguments"\s*:\s*(?:\{[\s\S]*?\}|"[^"]*")\})',
+    re.DOTALL,
+)
+# Single quoted Python-style dict pattern: {'tool': '...', 'args': ...}
+_PYTHON_DICT_TOOL = re.compile(
+    r"(\{'tool'\s*:\s*'[^']+'[\s\S]*?\})",
+    re.DOTALL,
+)
+# Inline tool call prefix: tool_name{"args": ...} or tool_name({"path": ...})
+_INLINE_TOOL_PREFIX = re.compile(
+    r'(\b([a-zA-Z0-9_]+)\s*(\{\s*"(?:args|arguments|parameters|path|filename|file|content)"[\s\S]*?\}))',
+    re.DOTALL,
+)
 
 
 def _try_parse_json(s: str) -> dict[str, Any] | None:
     """Attempt to parse JSON with progressive error recovery."""
+    if not s:
+        return None
     s = s.strip()
-    # Direct parse
+
+    # Direct standard parse
     try:
-        return json.loads(s)
+        res = json.loads(s)
+        if isinstance(res, dict):
+            return res
     except json.JSONDecodeError:
         pass
-    # Try to recover truncated JSON by counting brackets
+
+    # Clean markdown fences if embedded
+    cleaned = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
-        s2 = _balance_braces(s)
-        return json.loads(s2)
+        res = json.loads(cleaned)
+        if isinstance(res, dict):
+            return res
     except Exception:
         pass
-    # Last resort: strip trailing garbage after the last closing brace
-    m = re.search(r'(\{[\s\S]*\})', s)
-    if m:
+
+    # Try removing trailing commas before closing braces/brackets
+    no_trailing_commas = re.sub(r",\s*([\]}])", r"\1", cleaned)
+    try:
+        res = json.loads(no_trailing_commas)
+        if isinstance(res, dict):
+            return res
+    except Exception:
+        pass
+
+    # Try Python literal eval if using single quotes
+    if "'" in cleaned and '"' not in cleaned:
         try:
-            return json.loads(m.group(1))
+            import ast
+            res = ast.literal_eval(cleaned)
+            if isinstance(res, dict):
+                return res
         except Exception:
             pass
+
+    # Try bracket balancing for truncated responses
+    try:
+        balanced = _balance_braces(no_trailing_commas)
+        res = json.loads(balanced)
+        if isinstance(res, dict):
+            return res
+    except Exception:
+        pass
+
+    # Try extracting outermost JSON object
+    m = re.search(r"(\{[\s\S]*\})", s)
+    if m:
+        sub = m.group(1)
+        sub_no_commas = re.sub(r",\s*([\]}])", r"\1", sub)
+        try:
+            res = json.loads(sub_no_commas)
+            if isinstance(res, dict):
+                return res
+        except Exception:
+            try:
+                res = json.loads(_balance_braces(sub_no_commas))
+                if isinstance(res, dict):
+                    return res
+            except Exception:
+                pass
+
     return None
 
 
@@ -99,14 +161,9 @@ def _balance_braces(s: str) -> str:
         elif ch in closes:
             if stack and stack[-1] == ch:
                 stack.pop()
+    if in_string:
+        s += '"'
     return s + "".join(reversed(stack))
-
-
-# Inline tool call prefix: tool_name{"args": ...} or tool_name({"path": ...})
-_INLINE_TOOL_PREFIX = re.compile(
-    r'(\b([a-zA-Z0-9_]+)\s*(\{\s*"(?:args|arguments|parameters|path|filename|file|content)"[\s\S]*?\}))',
-    re.DOTALL,
-)
 
 
 def _extract_tool_and_args(
@@ -169,7 +226,6 @@ def _extract_tool_and_args(
 
     # Parameter normalization for common tool arguments
     if tool_name:
-        # Normalize file path parameter names for filesystem tools
         _file_tools = {
             "delete_file", "read_file", "write_file", "create_file",
             "patch_file", "file_exists", "get_file_metadata",
@@ -248,7 +304,18 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
                 _add(ParsedToolCall(tool=name, args=args, raw=m.group(0), source="openai_fn"),
                      m.start(), m.end())
 
-    # 5. Inline tool call prefix: tool_name{"args": ...} or tool_name({"filename": ...})
+    # 5. Python-style single quoted dict
+    for m in _PYTHON_DICT_TOOL.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        data = _try_parse_json(m.group(1))
+        if data:
+            name, args = _extract_tool_and_args(data)
+            if name:
+                _add(ParsedToolCall(tool=name, args=args, raw=m.group(0), source="python_dict"),
+                     m.start(), m.end())
+
+    # 6. Inline tool call prefix: tool_name{"args": ...} or tool_name({"filename": ...})
     for m in _INLINE_TOOL_PREFIX.finditer(text):
         if _overlaps(m.start(), m.end()):
             continue
@@ -260,7 +327,7 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
                 _add(ParsedToolCall(tool=name, args=args, raw=m.group(0), source="inline_prefix"),
                      m.start(), m.end())
 
-    # 6. Top-level bare JSON response fallback
+    # 7. Top-level bare JSON response fallback
     if not calls:
         top_json = _try_parse_json(text)
         if isinstance(top_json, dict):
@@ -275,7 +342,7 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
                 _add(ParsedToolCall(tool=name, args=args, raw=text.strip(), source="bare_json_toplevel"), 0, len(text))
 
     # Sort by position in text (preserves model's intended order)
-    calls.sort(key=lambda c: text.find(c.raw))
+    calls.sort(key=lambda c: text.find(c.raw) if text.find(c.raw) >= 0 else 0)
     return calls
 
 
@@ -311,7 +378,7 @@ def validate_tool_call(
     tool_definitions: list[dict[str, Any]],
 ) -> tuple[bool, str]:
     """
-    Validate a parsed tool call against the registered tool definitions.
+    Validate a parsed tool call against registered tool definitions.
 
     Returns (ok, error_message).
     """
@@ -328,19 +395,51 @@ def validate_tool_call(
         if req not in call.args:
             return False, (
                 f"Tool '{call.tool}' missing required parameter '{req}'. "
-                f"Provided: {list(call.args.keys())}"
+                f"Provided parameters: {list(call.args.keys())}. "
+                f"Expected parameters schema: {list(properties.keys())}."
             )
 
     for arg_name, arg_value in call.args.items():
         if arg_name in properties:
             expected_type = properties[arg_name].get("type", "any")
             if not _check_type(arg_value, expected_type):
-                return False, (
-                    f"Tool '{call.tool}' parameter '{arg_name}' expected {expected_type}, "
-                    f"got {type(arg_value).__name__}"
-                )
+                # Try coercion if possible
+                coerced_ok, coerced_val = _try_coerce(arg_value, expected_type)
+                if coerced_ok:
+                    call.args[arg_name] = coerced_val
+                else:
+                    return False, (
+                        f"Tool '{call.tool}' parameter '{arg_name}' expected {expected_type}, "
+                        f"got {type(arg_value).__name__} ({repr(arg_value)[:60]})"
+                    )
 
     return True, ""
+
+
+def _try_coerce(val: Any, expected: str) -> tuple[bool, Any]:
+    if expected == "integer" and isinstance(val, str):
+        try:
+            return True, int(val)
+        except ValueError:
+            pass
+    elif expected == "number" and isinstance(val, str):
+        try:
+            return True, float(val)
+        except ValueError:
+            pass
+    elif expected == "boolean" and isinstance(val, str):
+        if val.lower() in ("true", "1", "yes"):
+            return True, True
+        if val.lower() in ("false", "0", "no"):
+            return True, False
+    elif expected == "array" and isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            if isinstance(parsed, list):
+                return True, parsed
+        except Exception:
+            return True, [val]
+    return False, val
 
 
 def _check_type(value: Any, expected: str) -> bool:

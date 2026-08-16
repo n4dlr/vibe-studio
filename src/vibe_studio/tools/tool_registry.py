@@ -582,14 +582,15 @@ class ToolRegistry:
             pass
 
 
-def _error_result(name: str, msg: str, duration: float = 0.0) -> dict[str, Any]:
+def _error_result(name: str, msg: str, duration: float = 0.0, cancelled: bool = False) -> dict[str, Any]:
     return {
         "tool": name,
-        "exit_code": 1,
+        "exit_code": 1 if not cancelled else -1,
         "stdout": "",
         "stderr": msg,
         "duration": duration,
         "files_changed": [],
+        "cancelled": cancelled,
     }
 
 
@@ -607,6 +608,7 @@ def _normalise_result(
             "stderr": str(raw_res.get("stderr", "")),
             "duration": duration,
             "files_changed": raw_res.get("files_changed", []),
+            "cancelled": bool(raw_res.get("cancelled", False)),
             "data": raw_res,
         }
 
@@ -625,6 +627,7 @@ def _normalise_result(
         "stderr": "",
         "duration": duration,
         "files_changed": changed,
+        "cancelled": False,
         "data": raw_res,
     }
 

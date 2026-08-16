@@ -24,6 +24,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from vibe_studio.agents.execution_context import ExecutionContext
 from vibe_studio.agents.output_processor import (
     ErrorCategory,
     ErrorInfo,
@@ -122,6 +123,7 @@ class AgentTaskResult:
     diff: str = ""
     error: str | None = None
     execution_id: str = ""
+    context: Optional[ExecutionContext] = None
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +168,11 @@ class AutonomousAgent:
         self.stream_callback = stream_callback
         self.cancellation_token = cancellation_token or CancellationToken()
         self.execution_id = execution_id or str(uuid.uuid4())
+        self.execution_context = ExecutionContext(
+            run_id=self.execution_id,
+            task_id=self.execution_id,
+            cancellation_token=self.cancellation_token,
+        )
         self.tool_timeout_seconds = tool_timeout_seconds
         self.llm_timeout_seconds = llm_timeout_seconds
         self.agent_task_timeout_seconds = agent_task_timeout_seconds
@@ -216,6 +223,7 @@ class AutonomousAgent:
         except ValueError:
             pass  # Fallback gracefully if non-standard transition occurs
         self.state = state
+        self.execution_context.transition_to(state.value)
         self._emit("state_changed", {"state": state.value})
 
     def cancel(self) -> None:
@@ -317,12 +325,13 @@ class AutonomousAgent:
         self.history.clear()
         self._read_hashes.clear()
         self._error_tracker.reset()
+        self.execution_context.task_prompt = task
         files_changed: set[str] = set()
         repair_cycle = 0
 
         plan = self.analyze_and_plan(task)
         if self._cancel_requested:
-            return AgentTaskResult(status=AgentState.CANCELLED, task=task, summary="Cancelled.")
+            return AgentTaskResult(status=AgentState.CANCELLED, task=task, summary="Cancelled.", context=self.execution_context)
 
         # ── Greeting fast-path ── immediately return without touching LLM or tools
         if plan.intent == "greeting":
@@ -336,6 +345,7 @@ class AutonomousAgent:
             return AgentTaskResult(
                 status=AgentState.COMPLETED, task=task,
                 summary=greeting_response, execution_id=self.execution_id,
+                context=self.execution_context,
             )
 
         if self.autonomy_mode == AutonomyMode.PLAN and not plan.approved:
@@ -344,6 +354,7 @@ class AutonomousAgent:
                 status=AgentState.WAITING_APPROVAL,
                 task=task,
                 summary="Plan created and awaiting user approval.",
+                context=self.execution_context,
             )
 
         # Detect model capabilities once
@@ -474,6 +485,7 @@ class AutonomousAgent:
                     files_changed=sorted(files_changed),
                     tool_history=self.history,
                     execution_id=self.execution_id,
+                    context=self.execution_context,
                 )
 
             if self.is_cancelled():
@@ -484,9 +496,11 @@ class AutonomousAgent:
                     summary="Execution cancelled by user.",
                     files_changed=sorted(files_changed), tool_history=self.history,
                     execution_id=self.execution_id,
+                    context=self.execution_context,
                 )
 
             iteration += 1
+            self.execution_context.iteration_count = iteration
 
             # Save rolling checkpoint
             self.checkpoint_system.save_checkpoint(
@@ -515,6 +529,7 @@ class AutonomousAgent:
                     summary="Execution cancelled by user.",
                     files_changed=sorted(files_changed), tool_history=self.history,
                     execution_id=self.execution_id,
+                    context=self.execution_context,
                 )
 
             # Parse ALL tool calls from this response
@@ -573,11 +588,14 @@ class AutonomousAgent:
                     "score": ver_res.score,
                 })
                 default_resource_manager.cleanup_execution(self.execution_id)
+                self.execution_context.validation_result = ver_res
+                self.execution_context.final_result = full_summary
                 return AgentTaskResult(
                     status=final_state, task=task,
                     summary=full_summary,
                     files_changed=sorted(files_changed), tool_history=self.history,
                     execution_id=self.execution_id,
+                    context=self.execution_context,
                 )
 
             # Execute each tool call in sequence
@@ -619,6 +637,7 @@ class AutonomousAgent:
 
                 # Execute
                 self._set_state(AgentState.EXECUTING)
+                self.execution_context.record_tool_call(call.tool)
                 self._emit("tool_starting", {"tool": call.tool, "args": call.args, "thought": thought})
 
                 t0 = time.monotonic()
@@ -629,6 +648,7 @@ class AutonomousAgent:
                     cancellation_token=self.cancellation_token,
                 )
                 duration = time.monotonic() - t0
+                self.execution_context.finish_tool_call()
 
                 self._set_state(AgentState.OBSERVING)
                 self._emit("tool_finished", {"tool": call.tool, "observation": obs, "duration": duration})
@@ -646,7 +666,10 @@ class AutonomousAgent:
                 self.history.append(step)
 
                 if obs.get("files_changed"):
-                    files_changed.update(str(f) for f in obs["files_changed"] if f)
+                    for fc in obs["files_changed"]:
+                        if fc:
+                            files_changed.add(str(fc))
+                            self.execution_context.record_file_change(str(fc))
 
                 # After a read_file, record the hash for conflict detection
                 if call.tool == "read_file" and "path" in call.args and obs.get("exit_code") == 0:
@@ -711,11 +734,14 @@ class AutonomousAgent:
                             "score": ver_res.score,
                         })
                         default_resource_manager.cleanup_execution(self.execution_id)
+                        self.execution_context.validation_result = ver_res
+                        self.execution_context.final_result = full_summary
                         return AgentTaskResult(
                             status=final_state, task=task,
                             summary=full_summary,
                             files_changed=sorted(files_changed), tool_history=self.history,
                             execution_id=self.execution_id,
+                            context=self.execution_context,
                         )
                     # File not verified — fall through and let agent continue
                 # ──────────────────────────────────────────────────────────
@@ -881,7 +907,6 @@ class AutonomousAgent:
             )
         except (ProviderError, Exception) as exc:
             self._emit("provider_error", {"error": str(exc)})
-            return self._fallback_deterministic_step(prompt)
             return self._fallback_deterministic_step(prompt)
 
     # ------------------------------------------------------------------

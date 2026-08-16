@@ -146,45 +146,60 @@ class OpenAICompatibleProvider:
     ) -> str:
         self._reset_cancel()
 
+        unreg = None
         if cancellation_token is not None:
-            cancellation_token.register_callback(self.cancel)
+            unreg = cancellation_token.register_callback(self.cancel)
 
-        def _do_chat():
-            payload: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "stream": bool(stream and callback),
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            def _do_chat():
+                payload: dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "stream": bool(stream and callback),
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                headers = {"Content-Type": "application/json"}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
 
-            req = Request(
-                f"{self.base_url}/chat/completions",
-                data=json.dumps(payload).encode("utf-8"),
-                headers=headers,
-                method="POST",
-            )
-            timeout = kwargs.get("timeout", self.timeout)
+                req = Request(
+                    f"{self.base_url}/chat/completions",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers,
+                    method="POST",
+                )
+                timeout = kwargs.get("timeout", self.timeout)
 
-            try:
-                if stream and callback:
-                    return self._stream_chat(req, callback, event_callback, timeout, cancellation_token)
-                with urlopen(req, timeout=timeout) as resp:
-                    body = resp.read().decode("utf-8", errors="replace")
-                result = json.loads(body)
-                choices = result.get("choices", [])
-                if choices:
-                    return choices[0].get("message", {}).get("content", "")
-                return ""
-            except (HTTPError, URLError, TimeoutError) as exc:
-                raise ProviderError(f"OpenAI-compatible request failed: {exc}") from exc
-            except json.JSONDecodeError as exc:
-                raise ProviderError("OpenAI-compatible provider returned malformed JSON") from exc
+                try:
+                    if stream and callback:
+                        return self._stream_chat(req, callback, event_callback, timeout, cancellation_token)
+                    with urlopen(req, timeout=timeout) as resp:
+                        body = resp.read().decode("utf-8", errors="replace")
+                    result = json.loads(body)
+                    choices = result.get("choices", [])
+                    usage = result.get("usage", {})
+                    content = choices[0].get("message", {}).get("content", "") if choices else ""
+                    if event_callback:
+                        event_callback(StreamEvent.complete(
+                            content,
+                            prompt_tokens=usage.get("prompt_tokens", 0),
+                            completion_tokens=usage.get("completion_tokens", 0),
+                        ))
+                    return content
+                except (HTTPError, URLError, TimeoutError) as exc:
+                    if self._is_cancelled(cancellation_token):
+                        if event_callback:
+                            event_callback(StreamEvent.cancelled())
+                        return ""
+                    raise ProviderError(f"OpenAI-compatible request failed: {exc}") from exc
+                except json.JSONDecodeError as exc:
+                    raise ProviderError("OpenAI-compatible provider returned malformed JSON") from exc
 
-        return self.circuit_breaker.call(_do_chat)
+            return self.circuit_breaker.call(_do_chat)
+        finally:
+            if unreg:
+                unreg()
 
     def _stream_chat(
         self,
@@ -195,6 +210,10 @@ class OpenAICompatibleProvider:
         cancellation_token: Optional[CancellationToken] = None,
     ) -> str:
         chunks: list[str] = []
+        in_thinking = False
+        prompt_tokens = 0
+        completion_tokens = 0
+
         try:
             resp = urlopen(req, timeout=timeout)
             with self._resp_lock:
@@ -208,27 +227,49 @@ class OpenAICompatibleProvider:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data: "):
                         continue
-                    data_str = line[6:]
+                    data_str = line[6:].strip()
                     if data_str == "[DONE]":
                         if event_callback:
-                            event_callback(StreamEvent.complete("".join(chunks)))
+                            event_callback(StreamEvent.complete(
+                                "".join(chunks),
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                            ))
                         break
                     try:
                         data = json.loads(data_str)
                     except (json.JSONDecodeError, ValueError):
                         logger.debug("OpenAI provider: skipping malformed SSE chunk: %r", data_str[:80])
                         continue
+
+                    usage = data.get("usage")
+                    if usage:
+                        prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                        completion_tokens = usage.get("completion_tokens", completion_tokens)
+
                     delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
                     if delta:
                         chunks.append(delta)
-                        callback(delta)
-                        if event_callback:
-                            event_callback(StreamEvent.token(delta))
-        except OSError:
-            if event_callback:
-                event_callback(StreamEvent.cancelled("Stream closed"))
+                        if "<think>" in delta:
+                            in_thinking = True
+                        if in_thinking:
+                            if event_callback:
+                                event_callback(StreamEvent.thinking(delta))
+                            if "</think>" in delta:
+                                in_thinking = False
+                        else:
+                            callback(delta)
+                            if event_callback:
+                                event_callback(StreamEvent.token(delta))
+        except (OSError, Exception) as exc:
+            if self._is_cancelled(cancellation_token):
+                if event_callback:
+                    event_callback(StreamEvent.cancelled("Stream cancelled"))
+            else:
+                logger.warning("OpenAI stream interrupted: %s", exc)
+                if event_callback:
+                    event_callback(StreamEvent.error(f"Stream error: {exc}"))
         finally:
             with self._resp_lock:
                 self._active_resp = None
         return "".join(chunks)
-

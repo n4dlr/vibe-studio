@@ -19,6 +19,7 @@ from vibe_studio.agents.intent_predictor import IntentPredictor
 from vibe_studio.agents.navigator_agent import NavigatorAgent
 from vibe_studio.agents.reviewer_agent import ReviewerAgent, ReviewResult
 from vibe_studio.context.context_engine import ContextEngine
+from vibe_studio.core.cancellation import CancellationToken
 from vibe_studio.core.global_memory import GlobalMemory
 from vibe_studio.tools.patch_tools import PatchTools
 from vibe_studio.tools.terminal_tools import TerminalTools
@@ -58,6 +59,7 @@ class AgentOrchestrator:
         stream_callback: Callable[[str], None] | None = None,
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
         max_iterations: int = 30,
+        cancellation_token: CancellationToken | None = None,
     ):
         self.workspace_root = Path(workspace_root).resolve()
         self.provider = provider
@@ -65,6 +67,7 @@ class AgentOrchestrator:
         self.stream_callback = stream_callback
         self.progress_callback = progress_callback
         self.max_iterations = max_iterations
+        self._cancellation_token: CancellationToken | None = cancellation_token
 
         self.intent_predictor = IntentPredictor()
         self.navigator = NavigatorAgent(self.workspace_root)
@@ -123,11 +126,25 @@ class AgentOrchestrator:
             autonomy_mode=AutonomyMode.AUTO,
             max_iterations=self.max_iterations,
             stream_callback=self.stream_callback,
+            cancellation_token=self._cancellation_token,
         )
         agent.add_event_callback(
             lambda etype, d: self._notify_progress(f"agent_{etype}", d)
         )
         return agent
+
+    def cancel(self) -> None:
+        """Request immediate cancellation of the current pipeline."""
+        if self._cancellation_token is None:
+            from vibe_studio.core.cancellation import CancellationToken as _CT
+            self._cancellation_token = _CT()
+        self._cancellation_token.cancel()
+
+    def _is_cancelled(self) -> bool:
+        return (
+            self._cancellation_token is not None
+            and self._cancellation_token.is_cancelled()
+        )
 
     # ------------------------------------------------------------------
     # FAST path — surgical single-file change, minimal overhead
@@ -289,6 +306,12 @@ class AgentOrchestrator:
 
     def execute_task(self, prompt: str, active_file: str | None = None) -> OrchestratedExecutionResult:
         timings: list[PipelineStageTiming] = []
+
+        if self._is_cancelled():
+            return OrchestratedExecutionResult(
+                prompt=prompt,
+                summary="Cancelled before execution started.",
+            )
 
         # Global memory hint
         global_hint = self._global_memory.build_global_hint(prompt)

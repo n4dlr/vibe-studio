@@ -106,46 +106,62 @@ class OllamaProvider:
         self._reset_cancel()
         model = self._resolve_model(model)
 
-        # Register socket abort callback on CancellationToken
+        unreg = None
         if cancellation_token is not None:
-            cancellation_token.register_callback(self.cancel)
+            unreg = cancellation_token.register_callback(self.cancel)
 
-        def _do_generate():
-            payload: dict[str, Any] = {
-                "model": model,
-                "prompt": prompt,
-                "system": system_prompt or (
-                    "You are an autonomous AI software engineer inside Vibe Studio IDE. "
-                    "You can use tools to read files, search code, edit files, run tests, and fix errors."
-                ),
-                "stream": bool(stream and callback),
-                "options": {
-                    "temperature": temperature,
-                    "top_p": top_p,
-                    "num_ctx": kwargs.get("num_ctx", self._num_ctx),
-                },
-            }
+        try:
+            def _do_generate():
+                payload: dict[str, Any] = {
+                    "model": model,
+                    "prompt": prompt,
+                    "system": system_prompt or (
+                        "You are an autonomous AI software engineer inside Vibe Studio IDE. "
+                        "You can use tools to read files, search code, edit files, run tests, and fix errors."
+                    ),
+                    "stream": bool(stream and callback),
+                    "options": {
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "num_ctx": kwargs.get("num_ctx", self._num_ctx),
+                    },
+                }
 
-            req = Request(
-                f"{self.base_url}/api/generate",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            timeout = kwargs.get("timeout", self.timeout)
+                req = Request(
+                    f"{self.base_url}/api/generate",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                timeout = kwargs.get("timeout", self.timeout)
 
-            try:
-                if stream and callback:
-                    return self._stream_generate(req, callback, event_callback, timeout, cancellation_token)
-                with urlopen(req, timeout=timeout) as resp:
-                    body = resp.read().decode("utf-8", errors="replace")
-                return json.loads(body).get("response", "")
-            except (HTTPError, URLError, TimeoutError) as exc:
-                raise ProviderError(f"Ollama generate failed: {exc}") from exc
-            except json.JSONDecodeError as exc:
-                raise ProviderError("Ollama returned malformed JSON") from exc
+                try:
+                    if stream and callback:
+                        return self._stream_generate(req, callback, event_callback, timeout, cancellation_token)
+                    with urlopen(req, timeout=timeout) as resp:
+                        body = resp.read().decode("utf-8", errors="replace")
+                    data = json.loads(body)
+                    resp_text = data.get("response", "")
+                    if event_callback:
+                        event_callback(StreamEvent.complete(
+                            resp_text,
+                            prompt_tokens=data.get("prompt_eval_count", 0),
+                            completion_tokens=data.get("eval_count", 0),
+                        ))
+                    return resp_text
+                except (HTTPError, URLError, TimeoutError) as exc:
+                    if self._is_cancelled(cancellation_token):
+                        if event_callback:
+                            event_callback(StreamEvent.cancelled())
+                        return ""
+                    raise ProviderError(f"Ollama generate failed: {exc}") from exc
+                except json.JSONDecodeError as exc:
+                    raise ProviderError("Ollama returned malformed JSON") from exc
 
-        return self.circuit_breaker.call(_do_generate)
+            return self.circuit_breaker.call(_do_generate)
+        finally:
+            if unreg:
+                unreg()
 
     def _stream_generate(
         self,
@@ -156,6 +172,10 @@ class OllamaProvider:
         cancellation_token: Optional[CancellationToken] = None,
     ) -> str:
         chunks: list[str] = []
+        in_thinking = False
+        prompt_tokens = 0
+        completion_tokens = 0
+
         try:
             resp = urlopen(req, timeout=timeout)
             with self._resp_lock:
@@ -174,20 +194,44 @@ class OllamaProvider:
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         logger.debug("Ollama: skipping malformed chunk: %r", raw_line[:80])
                         continue
+
                     chunk = data.get("response", "")
+                    if data.get("prompt_eval_count"):
+                        prompt_tokens = data.get("prompt_eval_count", 0)
+                    if data.get("eval_count"):
+                        completion_tokens = data.get("eval_count", 0)
+
                     if chunk:
                         chunks.append(chunk)
-                        callback(chunk)
-                        if event_callback:
-                            event_callback(StreamEvent.token(chunk))
+                        # Detect <think> tags for thinking stream events
+                        if "<think>" in chunk:
+                            in_thinking = True
+                        if in_thinking:
+                            if event_callback:
+                                event_callback(StreamEvent.thinking(chunk))
+                            if "</think>" in chunk:
+                                in_thinking = False
+                        else:
+                            callback(chunk)
+                            if event_callback:
+                                event_callback(StreamEvent.token(chunk))
+
                     if data.get("done"):
                         if event_callback:
-                            event_callback(StreamEvent.complete("".join(chunks)))
+                            event_callback(StreamEvent.complete(
+                                "".join(chunks),
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                            ))
                         break
-        except OSError:
-            # Socket closed — cancelled or connection lost
-            if event_callback:
-                event_callback(StreamEvent.cancelled("Stream closed"))
+        except (OSError, Exception) as exc:
+            if self._is_cancelled(cancellation_token):
+                if event_callback:
+                    event_callback(StreamEvent.cancelled("Stream cancelled"))
+            else:
+                logger.warning("Ollama stream interrupted: %s", exc)
+                if event_callback:
+                    event_callback(StreamEvent.error(f"Stream error: {exc}"))
         finally:
             with self._resp_lock:
                 self._active_resp = None
@@ -212,41 +256,57 @@ class OllamaProvider:
         self._reset_cancel()
         model = self._resolve_model(model)
 
+        unreg = None
         if cancellation_token is not None:
-            cancellation_token.register_callback(self.cancel)
+            unreg = cancellation_token.register_callback(self.cancel)
 
-        def _do_chat():
-            payload: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "stream": bool(stream and callback),
-                "options": {
-                    "temperature": temperature,
-                    "num_ctx": kwargs.get("num_ctx", self._num_ctx),
-                },
-            }
+        try:
+            def _do_chat():
+                payload: dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "stream": bool(stream and callback),
+                    "options": {
+                        "temperature": temperature,
+                        "num_ctx": kwargs.get("num_ctx", self._num_ctx),
+                    },
+                }
 
-            req = Request(
-                f"{self.base_url}/api/chat",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            timeout = kwargs.get("timeout", self.timeout)
+                req = Request(
+                    f"{self.base_url}/api/chat",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                timeout = kwargs.get("timeout", self.timeout)
 
-            try:
-                if stream and callback:
-                    return self._stream_chat(req, callback, event_callback, timeout, cancellation_token)
-                with urlopen(req, timeout=timeout) as resp:
-                    body = resp.read().decode("utf-8", errors="replace")
-                result = json.loads(body)
-                return result.get("message", {}).get("content", "")
-            except (HTTPError, URLError, TimeoutError) as exc:
-                raise ProviderError(f"Ollama chat failed: {exc}") from exc
-            except json.JSONDecodeError as exc:
-                raise ProviderError("Ollama chat returned malformed JSON") from exc
+                try:
+                    if stream and callback:
+                        return self._stream_chat(req, callback, event_callback, timeout, cancellation_token)
+                    with urlopen(req, timeout=timeout) as resp:
+                        body = resp.read().decode("utf-8", errors="replace")
+                    result = json.loads(body)
+                    msg_content = result.get("message", {}).get("content", "")
+                    if event_callback:
+                        event_callback(StreamEvent.complete(
+                            msg_content,
+                            prompt_tokens=result.get("prompt_eval_count", 0),
+                            completion_tokens=result.get("eval_count", 0),
+                        ))
+                    return msg_content
+                except (HTTPError, URLError, TimeoutError) as exc:
+                    if self._is_cancelled(cancellation_token):
+                        if event_callback:
+                            event_callback(StreamEvent.cancelled())
+                        return ""
+                    raise ProviderError(f"Ollama chat failed: {exc}") from exc
+                except json.JSONDecodeError as exc:
+                    raise ProviderError("Ollama chat returned malformed JSON") from exc
 
-        return self.circuit_breaker.call(_do_chat)
+            return self.circuit_breaker.call(_do_chat)
+        finally:
+            if unreg:
+                unreg()
 
     def _stream_chat(
         self,
@@ -257,6 +317,10 @@ class OllamaProvider:
         cancellation_token: Optional[CancellationToken] = None,
     ) -> str:
         chunks: list[str] = []
+        in_thinking = False
+        prompt_tokens = 0
+        completion_tokens = 0
+
         try:
             resp = urlopen(req, timeout=timeout)
             with self._resp_lock:
@@ -275,19 +339,43 @@ class OllamaProvider:
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         logger.debug("Ollama chat: skipping malformed chunk: %r", raw_line[:80])
                         continue
+
+                    if data.get("prompt_eval_count"):
+                        prompt_tokens = data.get("prompt_eval_count", 0)
+                    if data.get("eval_count"):
+                        completion_tokens = data.get("eval_count", 0)
+
                     chunk = data.get("message", {}).get("content", "")
                     if chunk:
                         chunks.append(chunk)
-                        callback(chunk)
-                        if event_callback:
-                            event_callback(StreamEvent.token(chunk))
+                        if "<think>" in chunk:
+                            in_thinking = True
+                        if in_thinking:
+                            if event_callback:
+                                event_callback(StreamEvent.thinking(chunk))
+                            if "</think>" in chunk:
+                                in_thinking = False
+                        else:
+                            callback(chunk)
+                            if event_callback:
+                                event_callback(StreamEvent.token(chunk))
+
                     if data.get("done"):
                         if event_callback:
-                            event_callback(StreamEvent.complete("".join(chunks)))
+                            event_callback(StreamEvent.complete(
+                                "".join(chunks),
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                            ))
                         break
-        except OSError:
-            if event_callback:
-                event_callback(StreamEvent.cancelled("Stream closed"))
+        except (OSError, Exception) as exc:
+            if self._is_cancelled(cancellation_token):
+                if event_callback:
+                    event_callback(StreamEvent.cancelled("Stream cancelled"))
+            else:
+                logger.warning("Ollama chat stream interrupted: %s", exc)
+                if event_callback:
+                    event_callback(StreamEvent.error(f"Stream error: {exc}"))
         finally:
             with self._resp_lock:
                 self._active_resp = None

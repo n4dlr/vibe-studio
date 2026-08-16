@@ -278,8 +278,13 @@ class LSPClient:
         timeout: float = 3.0,
         doc_uri: str | None = None,
         doc_version: int | None = None,
+        cancellation_token: Any = None,
     ) -> dict[str, Any] | None:
         if not self.process or not self.process.stdin or self.process.poll() is not None:
+            return None
+
+        # Respect cancellation before even sending
+        if cancellation_token is not None and getattr(cancellation_token, "is_cancelled", lambda: False)():
             return None
 
         req_id = self._next_id()
@@ -313,19 +318,36 @@ class LSPClient:
             logger.error(f"Error writing to LSP stdin: {exc}")
             return None
 
-        # Wait for correlated response
-        got_signal = event.wait(timeout=timeout)
+        # Wait for correlated response; poll cancellation token every 100 ms
+        deadline = time.monotonic() + timeout
+        got_signal = False
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            got_signal = event.wait(timeout=min(0.1, remaining))
+            if got_signal:
+                break
+            if cancellation_token is not None and getattr(cancellation_token, "is_cancelled", lambda: False)():
+                # Send LSP cancel notification (best-effort)
+                self._send_cancel_notification(req_id)
+                break
 
         with self._response_lock:
             self._pending_events.pop(req_id, None)
-            meta = self._pending_metadata.pop(req_id, None)
+            self._pending_metadata.pop(req_id, None)
             resp = self._pending_responses.pop(req_id, None)
 
         if not got_signal:
-            logger.debug(f"LSP request '{method}' (id={req_id}) timed out after {timeout}s")
+            logger.debug(f"LSP request '{method}' (id={req_id}) timed out or cancelled after {timeout}s")
             return None
 
         return resp
+
+    def _send_cancel_notification(self, req_id: int) -> None:
+        """Send LSP $/cancelRequest notification (best-effort)."""
+        try:
+            self._send_notification("$/cancelRequest", {"id": req_id})
+        except Exception:
+            pass
 
     def _send_notification(self, method: str, params: dict[str, Any]) -> None:
         if not self.process or not self.process.stdin or self.process.poll() is not None:
