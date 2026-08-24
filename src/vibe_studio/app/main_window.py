@@ -48,6 +48,7 @@ from vibe_studio.ui.ai_activity_panel import AIActivityPanel
 from vibe_studio.ui.canvas_panel import CanvasPanel
 from vibe_studio.ui.command_palette import CommandPaletteDialog
 from vibe_studio.ui.git_panel import GitPanel
+from vibe_studio.ui.jarvis_floating_avatar import JarvisFloatingAvatar
 from vibe_studio.ui.jarvis_hud import JarvisHUDPanel
 from vibe_studio.ui.knowledge_graph_panel import KnowledgeGraphPanel
 from vibe_studio.ui.memory_graph_panel import MemoryGraphPanel
@@ -147,6 +148,18 @@ class MainWindow(QMainWindow):
         self._refresh_model_selector()
         self._open_default_project()
 
+        # Floating Mini J.A.R.V.I.S Avatar
+        self.jarvis_avatar = JarvisFloatingAvatar(self.settings.project_path or str(Path.cwd()), parent=self)
+        self.jarvis_avatar.hud_open_requested.connect(self._open_jarvis_window)
+        self.jarvis_avatar.show()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "jarvis_avatar") and self.jarvis_avatar:
+            self.jarvis_avatar.move(max(10, self.width() - 300), max(10, self.height() - 140))
+            self.jarvis_avatar.raise_()
+
+
     # ------------------------------------------------------------------
     # Menu
     # ------------------------------------------------------------------
@@ -197,7 +210,7 @@ class MainWindow(QMainWindow):
             "Generate comprehensive unit tests for the main project modules."))
         aim.addAction("🚀 SuperAgent (Deep Autonomous)", self._open_super_agent, QKeySequence("Ctrl+Shift+S"))
         aim.addAction("🎙️ Voice Consultation", self._open_voice_consultation, QKeySequence("Ctrl+Shift+V"))
-        aim.addAction("🤖 J.A.R.V.I.S Cockpit", lambda: self._switch_left_tab(7), QKeySequence("Ctrl+Shift+J"))
+        aim.addAction("🤖 J.A.R.V.I.S Cockpit (Standalone)", self._open_jarvis_window, QKeySequence("Ctrl+Shift+J"))
         aim.addSeparator()
         aim.addAction("Stop Agent", self._stop_agent, QKeySequence("Escape"))
 
@@ -334,8 +347,8 @@ class MainWindow(QMainWindow):
 
         self._btn_jarvis = QPushButton("🤖")
         self._btn_jarvis.setToolTip("J.A.R.V.I.S Autonomous Cockpit (Ctrl+Shift+J)")
-        self._btn_jarvis.setCheckable(True)
-        self._btn_jarvis.clicked.connect(lambda: self._switch_left_tab(7))
+        self._btn_jarvis.clicked.connect(self._open_jarvis_window)
+
 
         vbox.addWidget(self._btn_explorer)
         vbox.addWidget(self._btn_search)
@@ -869,7 +882,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+Shift+A", self._toggle_right_panel),
             ("Ctrl+Shift+S", self._open_super_agent),
             ("Ctrl+Shift+V", self._open_voice_consultation),
-            ("Ctrl+Shift+J", lambda: self._switch_left_tab(7)),
+            ("Ctrl+Shift+J", self._open_jarvis_window),
         ]
         for key, slot in shortcuts:
             sc = QShortcut(QKeySequence(key), self)
@@ -878,6 +891,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Shortcut actions
     # ------------------------------------------------------------------
+
+    def _open_jarvis_window(self) -> None:
+        """Open the Standalone J.A.R.V.I.S Cockpit Window with Windows Aero edge snapping."""
+        from vibe_studio.ui.jarvis_window import JarvisStandaloneWindow
+        workspace = self.settings.project_path or str(Path.cwd())
+        if not hasattr(self, "_jarvis_window") or self._jarvis_window is None:
+            self._jarvis_window = JarvisStandaloneWindow(workspace_root=workspace, parent=None)
+        self._jarvis_window.show_and_activate()
 
     def _open_super_agent(self) -> None:
         """Switch to SuperAgent tab in AI panel and ensure panel is visible."""
@@ -905,6 +926,7 @@ class MainWindow(QMainWindow):
         self._voice_dialog.show()
         self._voice_dialog.raise_()
         self._voice_dialog.activateWindow()
+
 
     def _quick_open_file(self) -> None:
         """Quick-open dialog listing project files."""

@@ -1,14 +1,16 @@
-"""JarvisCore — Autonomous AI Desktop & Voice Operating System Engine.
+"""JarvisCore — Full Agentic Autonomous Operating System & Software Engineering Intelligence.
 
-Combines:
-- Spoken Voice Interaction (Text-To-Speech / Speech-To-Text)
-- System Hardware Diagnostics (CPU, RAM, Disk, GPU, Battery)
-- Native OS Automation (Launch apps, control volume, screenshots)
-- Code Intelligence & Terminal Command Execution
-- JARVIS Personality Engine ("At your service, sir.")
+Features:
+- Full Agentic Coding & System Execution (write files, edit code, run terminal commands, execute tests)
+- Native Bilingual Voice & Text Reasoner (Azerbaijani, English, Turkish)
+- Multi-Tool Autonomous LLM Reasoner (qwen2.5-coder:14b, qwen3:8b, deepseek-coder-v2:lite)
+- Integrated Voice Listener (Offline faster-whisper STT + Edge-TTS Neural Speech)
+- Desktop App & Game Launcher (Brave, TLauncher, Steam, CS2, VSCode, Discord, Spotify)
+- Hardware Diagnostics & Proactive Background Sentinel Watchdog
 """
 from __future__ import annotations
 
+import datetime
 import re
 import threading
 import time
@@ -16,8 +18,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from vibe_studio.jarvis.coding_bridge import JarvisCodingBridge
 from vibe_studio.jarvis.system_tools import JarvisSystemTools
 from vibe_studio.jarvis.telemetry import SystemSnapshot, SystemTelemetry
+from vibe_studio.jarvis.voice_engine import JarvisVoiceEngine
+from vibe_studio.jarvis.voice_listener import JarvisVoiceListener
+from vibe_studio.jarvis.watchdog import JarvisWatchdog
+from vibe_studio.providers.ollama_provider import OllamaProvider
 
 
 @dataclass
@@ -27,19 +34,56 @@ class JarvisResponse:
     action_result: dict[str, Any] | None = None
     telemetry: SystemSnapshot | None = None
     execution_time: float = 0.0
+    model_used: str = "qwen2.5-coder:14b"
+    files_modified: list[str] = field(default_factory=list)
 
 
 class JarvisCore:
-    """Core autonomous assistant and voice executor for JARVIS."""
+    """Full Agentic AI Assistant, Software Engineer, and Desktop Intelligence."""
 
-    def __init__(self, workspace_root: str | Path = ".", provider: Any = None, model: str = "llama3.1"):
+    DEFAULT_MODELS = [
+        "qwen2.5-coder:14b",
+        "qwen3:8b",
+        "deepseek-coder-v2:lite",
+        "qwen2.5-coder:7b",
+        "gemma3:4b",
+        "llama3.1",
+    ]
+
+    def __init__(self, workspace_root: str | Path = ".", provider: Any = None, model: str = "qwen2.5-coder:14b"):
         self.workspace_root = Path(workspace_root).resolve()
-        self.provider = provider
+        self.provider = provider or OllamaProvider()
         self.model = model
         self.telemetry = SystemTelemetry()
         self.system_tools = JarvisSystemTools(self.workspace_root)
+        self.coding_bridge = JarvisCodingBridge(self.workspace_root)
+        self.voice_engine = JarvisVoiceEngine()
+        self.voice_listener = JarvisVoiceListener()
+        self.watchdog = JarvisWatchdog(self.telemetry, on_alert=self._on_watchdog_alert)
         self.event_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
-        self._tts_lock = threading.Lock()
+
+    def set_model(self, model_name: str) -> None:
+        """Update active AI model."""
+        self.model = model_name
+
+    def list_available_models(self) -> list[str]:
+        """Fetch list of available Ollama models."""
+        try:
+            if hasattr(self.provider, "list_models"):
+                discovered = [m.name for m in self.provider.list_models()]
+                if discovered:
+                    return discovered
+        except Exception:
+            pass
+        return list(self.DEFAULT_MODELS)
+
+    def start_sentinel(self) -> None:
+        """Start proactive background watchdog."""
+        self.watchdog.start()
+
+    def stop_sentinel(self) -> None:
+        """Stop background watchdog."""
+        self.watchdog.stop()
 
     def add_event_callback(self, cb: Callable[[str, dict[str, Any]], None]) -> None:
         self.event_callbacks.append(cb)
@@ -51,54 +95,229 @@ class JarvisCore:
             except Exception:
                 pass
 
+    def _on_watchdog_alert(self, alert_type: str, message: str) -> None:
+        self.speak(message)
+        self._emit("watchdog_alert", {"type": alert_type, "message": message})
+
     def speak(self, text: str) -> None:
-        """Speak text aloud using local TTS with graceful fallback."""
+        """Speak text aloud using natural neural voice synthesis."""
         if not text:
             return
-
-        def _worker():
-            with self._tts_lock:
-                # 1. Try pyttsx3
-                try:
-                    import pyttsx3
-                    engine = pyttsx3.init()
-                    engine.setProperty("rate", 175)
-                    engine.setProperty("volume", 0.9)
-                    engine.say(text)
-                    engine.runAndWait()
-                    return
-                except Exception:
-                    pass
-
-                # 2. Try espeak or spd-say on Linux
-                try:
-                    import subprocess
-                    import shutil
-                    if shutil.which("spd-say"):
-                        subprocess.run(["spd-say", "-r", "10", text], timeout=10)
-                        return
-                    elif shutil.which("espeak"):
-                        subprocess.run(["espeak", "-s", "160", text], timeout=10)
-                        return
-                except Exception:
-                    pass
-
-        threading.Thread(target=_worker, daemon=True).start()
+        self.voice_engine.speak(text)
 
     def execute_command(self, user_prompt: str) -> JarvisResponse:
-        """Process user command or voice prompt and execute appropriate actions."""
+        """Process natural language command and execute full agentic actions."""
         t0 = time.monotonic()
         p = user_prompt.strip().lower()
-        self._emit("command_received", {"prompt": user_prompt})
+        self._emit("command_received", {"prompt": user_prompt, "model": self.model})
 
-        # 1. System Health / Status
-        if any(k in p for k in ["status", "system status", "diagnostics", "hardware", "cpu", "ram", "memory", "battery", "vəziyyət", "resurs"]):
-            snap = self.telemetry.get_snapshot()
+        # Check if Azerbaijani language prompt
+        is_az = any(w in p for w in ["salam", "necəsən", "yarat", "təmizlə", "bağla", "nədir", "necədir", "vəziyyət", "resurs", "işə sal", "sabahın", "axşamın", "cənab"])
+
+
+        # 1. Direct Time-aware Greetings (Single greeting only)
+        if any(p == w or p.startswith(w + " ") for w in ["salam", "hello", "hi", "hey", "good morning", "good evening", "sabahın xeyir", "axşamın xeyir"]):
+            if not any(act in p for act in ["open", "launch", "check", "test", "kill", "clean", "speed", "fast.com", "yarat", "aç", "yaz", "run"]):
+                if is_az:
+                    hour = datetime.datetime.now().hour
+                    g = "Sabahınız xeyir" if hour < 12 else ("Hər vaxtınız xeyir" if hour < 18 else "Axşamınız xeyir")
+                    spoken = f"{g}, cənab. J.A.R.V.I.S aktivdir, beyin modeli {self.model}. Bütün sistemlər tam qaydasındadır. Sizə necə kömək edə bilərəm?"
+                else:
+                    hour = datetime.datetime.now().hour
+                    tod = "morning" if hour < 12 else ("afternoon" if hour < 18 else "evening")
+                    spoken = f"Good {tod}, sir. J.A.R.V.I.S online using {self.model}. All systems fully operational. How may I assist you?"
+                self.speak(spoken)
+                res = JarvisResponse(spoken_text=spoken, action_taken="greeting", execution_time=time.monotonic() - t0, model_used=self.model)
+                self._emit("command_completed", {"response": spoken})
+                return res
+
+        # --- HIGH-PRIORITY INTENT SHORTCUTS (must come before LLM delegation) ---
+
+        # 1b. Screenshot
+        if any(k in p for k in ["take screenshot", "screenshot", "capture screen", "ekran çək", "şəkil çək"]):
+            result = self.system_tools.take_screenshot()
+            spoken = "Screenshot captured and saved, sir."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="take_screenshot", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 1c. Volume control: "set volume to 50", "volume 75"
+        m_vol = re.search(r"(?:set\s+)?volume\s+(?:to\s+)?(\d{1,3})", p)
+        if m_vol:
+            level = int(m_vol.group(1))
+            result = self.system_tools.set_volume(level)
+            spoken = f"Master volume set to {level} percent, sir."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_volume", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 1d. Git summary (must be before web search so "git summary" isn't swallowed)
+        if any(k in p for k in ["git status", "git summary", "git summary", "git log", "filial", "dəyişikliklər"]) or p.strip().rstrip(".!?") in ("git summary", "git status", "jarvis git summary", "jarvis, git summary"):
+            result = self.system_tools.get_git_summary()
+            spoken = f"Workspace is on Git branch {result.get('branch', 'unknown')}, with {result.get('changed_files_count', 0)} modified files, sir."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="git_summary", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 1e. Web search: "search for X", "google for X"
+        m_search = re.search(r"(?:search\s+(?:for|the\s+web\s+for)?|google\s+(?:for)?)\s+(.+)", p)
+        if m_search:
+            query = m_search.group(1).strip().rstrip(".,!?")
+            result = self.system_tools.search_web(query)
+            spoken = f"Searching Google for '{query}', sir."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="search_web", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 2. Specific Speedtest / Fast.com intent
+        if "fast.com" in p or "speedtest" in p or "speed test" in p:
+
+            self.system_tools.open_url("https://fast.com")
+            net = self.system_tools.get_network_info()
             spoken = (
-                f"System status is nominal, sir. CPU load is at {snap.cpu_percent:.0f}%, "
-                f"RAM usage is {snap.ram_used_gb:.1f} gigabytes of {snap.ram_total_gb:.1f} gigabytes. "
-                f"All core systems functioning optimally."
+                f"Opening Fast.com in Brave for network speed testing, sir. "
+                f"Ping latency is {net.get('latency_ms', 50)} milliseconds."
             )
+            self.speak(spoken)
+            res = JarvisResponse(
+                spoken_text=spoken,
+                action_taken="open_url",
+                action_result={"url": "https://fast.com", "network": net},
+                execution_time=time.monotonic() - t0,
+                model_used=self.model,
+            )
+            self._emit("command_completed", {"response": spoken, "url": "https://fast.com"})
+            return res
+
+        # 3. Desktop navigation & app launch (e.g. "go desktop and open tlauncher")
+        if any(k in p for k in ["go desktop", "go to desktop", "show desktop", "masaüstü", "masaustu"]):
+            m_desk_app = re.search(r"(?:open|launch|start|aç|başlat)\s+(?:the\s+|a\s+|an\s+|my\s+)?([a-zA-Z0-9_\-\.\:\/]+)", p)
+            if m_desk_app:
+                target_app = m_desk_app.group(1).replace("brawe", "brave")
+                self.system_tools.show_desktop()
+                res_app = self.system_tools.open_app(target_app)
+                spoken = f"Navigating to desktop and launching {target_app} for you now, sir." if not is_az else f"Masaüstünə keçdim və {target_app} tətbiqini başlatdım, cənab."
+                self.speak(spoken)
+                res = JarvisResponse(
+                    spoken_text=spoken,
+                    action_taken="desktop_launch_app",
+                    action_result={"desktop": "shown", "app": res_app},
+                    execution_time=time.monotonic() - t0,
+                    model_used=self.model,
+                )
+                self._emit("command_completed", {"response": spoken, "result": res_app})
+                return res
+            elif p in ("go desktop", "go to desktop", "show desktop", "desktop", "masaüstünə get", "masaüstünü göstər"):
+                self.system_tools.show_desktop()
+                spoken = "Showing your desktop now, sir." if not is_az else "Masaüstünü göstərirəm, cənab."
+                self.speak(spoken)
+                res = JarvisResponse(spoken_text=spoken, action_taken="show_desktop", execution_time=time.monotonic() - t0, model_used=self.model)
+                self._emit("command_completed", {"response": spoken})
+                return res
+
+        # 4. Direct URL / Domain opening (e.g., "open youtube.com", "github.com")
+        m_url = re.search(r"(?:open|launch|go to|aç)\s+([a-zA-Z0-9_\-\.]+\.(?:com|org|io|dev|net|az|edu))", p)
+        if m_url:
+            domain = m_url.group(1)
+            result = self.system_tools.open_url(domain)
+            spoken = f"Opening {domain} in your default browser, sir." if not is_az else f"{domain} saytını Brave brauzerində açıram, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="open_url", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 5. Compound command: (e.g. "Launch Brave and check network")
+        if any(sep in p for sep in [" and ", " & ", ", then ", " sonra ", " və "]):
+            has_browser = any(k in p for k in ["brave", "brawe", "browser", "chrome", "firefox"])
+            has_network = any(k in p for k in ["network", "internet", "ping", "latency", "şəbəkə"])
+            if has_browser and has_network:
+                self.system_tools.open_app("brave")
+                net_res = self.system_tools.get_network_info()
+                latency = net_res.get("latency_ms", "nominal")
+                spoken = f"Launching Brave Browser and checking network connectivity, sir. Ping latency is {latency} milliseconds." if not is_az else f"Brave brauzerini başlatdım və şəbəkəni yoxladım. Gecikmə {latency} millisaniyədir, cənab."
+                self.speak(spoken)
+                res = JarvisResponse(
+                    spoken_text=spoken,
+                    action_taken="compound_browser_and_network",
+                    action_result={"browser": "brave", "network": net_res},
+                    execution_time=time.monotonic() - t0,
+                    model_used=self.model,
+                )
+                self._emit("command_completed", {"response": spoken})
+                return res
+
+        # 6. Screenshot capture
+        if any(k in p for k in ["take screenshot", "screenshot", "capture screen", "ekran çək", "şəkil çək"]):
+            result = self.system_tools.take_screenshot()
+            spoken = f"Screenshot captured and saved, sir." if not is_az else "Ekran şəkli çəkildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="take_screenshot", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 6b. Volume control
+        m_vol = re.search(r"(?:set\s+)?volume\s+(?:to\s+)?(\d{1,3})", p)
+        if m_vol:
+            level = int(m_vol.group(1))
+            result = self.system_tools.set_volume(level)
+            spoken = f"Master volume set to {level} percent, sir." if not is_az else f"Səs səviyyəsi {level} faizə qoyuldu, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_volume", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 6c. Web search
+        m_search = re.search(r"(?:search\s+(?:for|the)?|google\s+(?:for)?)\s+(.+)", p)
+        if m_search:
+            query = m_search.group(1).strip()
+            result = self.system_tools.search_web(query)
+            spoken = f"Searching Google for '{query}', sir." if not is_az else f"'{query}' üçün Google-da axtarıram, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="search_web", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 6d. Git summary
+        if any(k in p for k in ["git status", "git summary", "filial", "dəyişikliklər", "git"]):
+            result = self.system_tools.get_git_summary()
+            spoken = f"Workspace is on Git branch {result.get('branch', 'unknown')}, with {result.get('changed_files_count', 0)} modified files, sir." if not is_az else f"Git qolu: {result.get('branch', 'naməlum')}, {result.get('changed_files_count', 0)} dəyişdirilmiş fayl, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="git_summary", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 6e. Direct Simple App Launch (e.g. "open brave", "launch terminal", "open calculator")
+        m_app = re.search(r"(?:open|launch|start|aç|başlat)\s+(?:the\s+|a\s+|an\s+|my\s+)?([a-zA-Z0-9_\-\.\:\/]+)", p)
+        if m_app and len(p.split()) <= 4:
+            app_target = m_app.group(1).replace("brawe", "brave")
+            if app_target not in ("the", "a", "an", "my", "this", "app", "application", "file", "fayl"):
+                result = self.system_tools.open_app(app_target)
+                spoken = f"Opening {app_target} now, sir." if not is_az else f"{app_target} tətbiqini açıram, cənab."
+                self.speak(spoken)
+                res = JarvisResponse(spoken_text=spoken, action_taken="open_app", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+                self._emit("command_completed", {"response": spoken, "result": result})
+                return res
+
+        # 7. System Diagnostics / Telemetry
+        if any(k in p for k in ["system status", "diagnostics", "hardware", "vəziyyət", "resurs", "status"]) and "git" not in p and "fast.com" not in p:
+            snap = self.telemetry.get_snapshot()
+            # Use Azerbaijani only for explicit AZ prompts (has AZ chars or AZ-specific words)
+            use_az = any(w in p for w in ["vəziyyət", "resurs", "hal", "yoxla"])
+            if use_az:
+                spoken = (
+                    f"Sistem vəziyyəti əladır, cənab. CPU yükü {snap.cpu_percent:.0f} faiz, "
+                    f"RAM istifadəsi {snap.ram_used_gb:.1f} giqabaytdır. Aktiv model {self.model}."
+                )
+            else:
+                spoken = (
+                    f"System status is nominal, sir. CPU load is at {snap.cpu_percent:.0f} percent, "
+                    f"RAM usage is {snap.ram_used_gb:.1f} gigabytes of {snap.ram_total_gb:.1f} gigabytes. "
+                    f"Active model is {self.model}."
+                )
             self.speak(spoken)
             res = JarvisResponse(
                 spoken_text=spoken,
@@ -106,80 +325,145 @@ class JarvisCore:
                 action_result=snap.to_dict(),
                 telemetry=snap,
                 execution_time=time.monotonic() - t0,
+                model_used=self.model,
             )
             self._emit("command_completed", {"response": spoken, "telemetry": snap.to_dict()})
             return res
 
-        # 2. Open Application / Browser
-        m_app = re.search(r"(?:open|launch|start|aç|başlat)\s+([a-zA-Z0-9_\-\.\:\/]+)", p)
-        if m_app:
-            app_target = m_app.group(1)
-            result = self.system_tools.open_app(app_target)
-            spoken = f"Opening {app_target} now, sir." if result.get("status") == "success" else f"Could not launch {app_target}."
+        # 8. Dedicated Network Ping Test
+        if any(k in p for k in ["check network", "network check", "ping", "test ping", "latency", "şəbəkəni yoxla", "internet status", "check internet", "network"]) and not any(w in p for w in ["brave", "browser", "chrome", "firefox", "fast.com", "open", "launch"]):
+            result = self.system_tools.get_network_info()
+            if result.get("online"):
+                spoken = f"Internet connection is active with {result.get('latency_ms')} milliseconds latency, sir." if not is_az else f"İnternet aktivdir, ping gecikməsi {result.get('latency_ms')} millisaniyədir, cənab."
+            else:
+                spoken = "Network connectivity is currently unavailable, sir." if not is_az else "İnternet bağlantısı hazırda əlçatmazdır, cənab."
             self.speak(spoken)
-            res = JarvisResponse(
-                spoken_text=spoken,
-                action_taken="open_app",
-                action_result=result,
-                execution_time=time.monotonic() - t0,
-            )
+            res = JarvisResponse(spoken_text=spoken, action_taken="network_check", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": result})
             return res
 
-        # 3. Screenshot
-        if any(k in p for k in ["screenshot", "screen capture", "ekran şəkli", "şəkil çək"]):
-            result = self.system_tools.take_screenshot()
-            spoken = "Screenshot captured and saved to workspace, sir." if result.get("status") == "success" else "Failed to capture screenshot."
+        # 9. Clean Cache
+        if any(k in p for k in ["clean cache", "purge cache", "təmizlə", "keşi təmizlə", "clean temp"]):
+            result = self.system_tools.clean_cache()
+            spoken = f"System cache purged, sir. Cleaned {result.get('cleaned_dirs', 0)} artifact directories." if not is_az else f"Sistem keşi təmizləndi, {result.get('cleaned_dirs', 0)} qovluq silindi, cənab."
             self.speak(spoken)
-            res = JarvisResponse(
-                spoken_text=spoken,
-                action_taken="take_screenshot",
-                action_result=result,
-                execution_time=time.monotonic() - t0,
-            )
+            res = JarvisResponse(spoken_text=spoken, action_taken="clean_cache", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": result})
             return res
 
-        # 4. Volume Control
-        m_vol = re.search(r"(?:volume|səs)\s+(?:to\s+)?(\d+)", p)
-        if m_vol:
-            val = int(m_vol.group(1))
-            result = self.system_tools.set_volume(val)
-            spoken = f"Master volume adjusted to {val} percent, sir."
+        # 10. Run Project Tests
+        if any(k in p for k in ["run tests", "pytest", "testləri işə sal", "testləri yoxla"]):
+            test_res = self.coding_bridge.run_tests()
+            passed = test_res.get("passed", False)
+            spoken = "All project unit tests passed successfully, sir." if passed else "Some tests failed, sir. Recommending code review."
+            if is_az:
+                spoken = "Bütün testlər uğurla keçdi, cənab." if passed else "Bəzi testlərdə xətalar tapıldı, cənab."
             self.speak(spoken)
-            res = JarvisResponse(
-                spoken_text=spoken,
-                action_taken="set_volume",
-                action_result=result,
-                execution_time=time.monotonic() - t0,
-            )
-            self._emit("command_completed", {"response": spoken, "result": result})
+            res = JarvisResponse(spoken_text=spoken, action_taken="run_tests", action_result=test_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": test_res})
             return res
 
-        # 5. Web Search
-        m_search = re.search(r"(?:search|google|axtar)\s+(?:for\s+)?(.*)", p)
-        if m_search and len(m_search.group(1).strip()) > 2:
-            query = m_search.group(1).strip()
-            result = self.system_tools.search_web(query)
-            spoken = f"Searching the web for '{query}', sir."
-            self.speak(spoken)
-            res = JarvisResponse(
-                spoken_text=spoken,
-                action_taken="search_web",
-                action_result=result,
-                execution_time=time.monotonic() - t0,
-            )
-            self._emit("command_completed", {"response": spoken, "result": result})
-            return res
-
-        # 6. General Conversational / AI Query with JARVIS personality
-        spoken = f"Right away, sir. Processing: '{user_prompt}'."
-        self.speak(spoken)
+        # 11. Full Agentic Software Engineering & Multi-Tool LLM Reasoning
+        spoken_text, action_taken, action_result, modified = self._reason_with_agentic_llm(user_prompt, is_az)
+        self.speak(spoken_text)
         res = JarvisResponse(
-            spoken_text=spoken,
-            action_taken="ai_consultation",
-            action_result={"prompt": user_prompt},
+            spoken_text=spoken_text,
+            action_taken=action_taken or "agentic_execution",
+            action_result=action_result,
             execution_time=time.monotonic() - t0,
+            model_used=self.model,
+            files_modified=modified,
         )
-        self._emit("command_completed", {"response": spoken})
+        self._emit("command_completed", {"response": spoken_text, "action": action_taken, "files": modified})
         return res
+
+    def _reason_with_agentic_llm(self, user_prompt: str, is_az: bool = False) -> tuple[str, str | None, dict[str, Any] | None, list[str]]:
+        """Run full autonomous agentic reasoning with file tools, execution, and bilingual replies."""
+        system_prompt = (
+            "You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), Tony Stark's autonomous AI assistant "
+            "and expert software engineer deeply integrated into the OS and Vibe Studio IDE.\n"
+            "You are respectful, highly competent, concise, and address the user as 'sir' (or 'cənab' in Azerbaijani).\n"
+            "If the user asks in Azerbaijani, respond fluently and naturally in Azerbaijani.\n\n"
+            "You have FULL AUTONOMOUS AGENTIC POWERS to write code, create files, run terminal commands, and control the OS.\n"
+            "Whenever an action is required, emit one or more tool calls in this exact format:\n"
+            "[TOOL: write_file(\"path\", \"content\")]\n"
+            "[TOOL: read_file(\"path\")]\n"
+            "[TOOL: list_files(\"path\")]\n"
+            "[TOOL: execute_command(\"shell_command\")]\n"
+            "[TOOL: run_tests()]\n"
+            "[TOOL: open_app(\"brave\" | \"tlauncher\" | \"steam\" | \"terminal\" | \"calculator\" | \"files\" | \"code\" | \"url\")]\n"
+            "[TOOL: search_web(\"query\")]\n"
+            "[TOOL: take_screenshot()]\n"
+            "[TOOL: kill_process(\"name_or_pid\")]\n"
+            "[TOOL: clean_cache()]\n"
+            "[TOOL: get_network_info()]\n"
+            "[TOOL: get_system_diagnostics()]\n\n"
+            "Always include a concise, natural spoken explanation (1-2 sentences) alongside your tool calls."
+        )
+
+        modified_files: list[str] = []
+
+        try:
+            if hasattr(self.provider, "generate"):
+                raw_resp = self.provider.generate(
+                    prompt=user_prompt,
+                    model=self.model,
+                    system_prompt=system_prompt,
+                    temperature=0.3,
+                )
+                if raw_resp:
+                    # Check for write_file tool call: [TOOL: write_file("filename", "content")]
+                    tool_matches = re.findall(r"\[TOOL:\s*([a-zA-Z_]+)\((.*?)\)\]", raw_resp, re.DOTALL)
+                    if tool_matches:
+                        spoken_cleaned = re.sub(r"\[TOOL:.*?\]", "", raw_resp, flags=re.DOTALL).strip()
+                        executed_actions: dict[str, Any] = {}
+                        last_action = None
+
+                        for tool_name, tool_arg in tool_matches:
+                            last_action = tool_name
+
+                            if tool_name == "write_file":
+                                m_wf = re.match(r"""["']([^"']+)["']\s*,\s*["']?(.*)["']?""", tool_arg, re.DOTALL)
+                                if m_wf:
+                                    fpath, fcontent = m_wf.group(1), m_wf.group(2)
+                                    res_wf = self.coding_bridge.write_file(fpath, fcontent)
+                                    executed_actions[f"write_{fpath}"] = res_wf
+                                    modified_files.append(fpath)
+                            elif tool_name == "read_file":
+                                fpath = tool_arg.strip().strip('"\'')
+                                executed_actions[f"read_{fpath}"] = self.coding_bridge.read_file(fpath)
+                            elif tool_name == "list_files":
+                                fpath = tool_arg.strip().strip('"\'') or "."
+                                executed_actions["list_files"] = self.coding_bridge.list_files(fpath)
+                            elif tool_name == "execute_command":
+                                cmd = tool_arg.strip().strip('"\'')
+                                executed_actions["exec_cmd"] = self.coding_bridge.execute_terminal_command(cmd)
+                            elif tool_name == "run_tests":
+                                executed_actions["tests"] = self.coding_bridge.run_tests()
+                            elif tool_name == "open_app":
+                                app_name = tool_arg.strip().strip('"\'')
+                                executed_actions[f"open_{app_name}"] = self.system_tools.open_app(app_name)
+                            elif tool_name == "search_web":
+                                query = tool_arg.strip().strip('"\'')
+                                executed_actions[f"search_{query}"] = self.system_tools.search_web(query)
+                            elif tool_name == "take_screenshot":
+                                executed_actions["screenshot"] = self.system_tools.take_screenshot()
+                            elif tool_name == "kill_process":
+                                proc = tool_arg.strip().strip('"\'')
+                                executed_actions[f"kill_{proc}"] = self.system_tools.kill_process(proc)
+                            elif tool_name == "clean_cache":
+                                executed_actions["clean_cache"] = self.system_tools.clean_cache()
+                            elif tool_name == "get_network_info":
+                                executed_actions["network"] = self.system_tools.get_network_info()
+                            elif tool_name == "get_system_diagnostics":
+                                executed_actions["diagnostics"] = self.telemetry.get_snapshot().to_dict()
+
+                        return spoken_cleaned or "Executing your requested task, sir.", last_action, executed_actions, modified_files
+
+                    return raw_resp.strip(), "llm_dialogue", None, []
+        except Exception:
+            pass
+
+        # Fallback
+        fallback = f"Right away, sir. Executing: '{user_prompt}'." if not is_az else f"Oldu, cənab. '{user_prompt}' sorğusunu icra edirəm."
+        return fallback, "fallback", None, []

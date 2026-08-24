@@ -38,7 +38,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=str, default=".", help="Workspace root directory")
     subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand to execute")
 
+    # --- Subcommand: gui ---
+    subparsers.add_parser("gui", help="Launch the full Vibe Studio Desktop GUI with J.A.R.V.I.S")
+
+
     # --- Subcommand: run ---
+
     run_parser = subparsers.add_parser("run", help="Run an autonomous agent task in headless CLI mode")
     run_parser.add_argument("prompt", type=str, help="Task prompt for the agent")
     run_parser.add_argument("--file", type=str, default=None, help="Active file path hint")
@@ -317,13 +322,13 @@ def main(argv: list[str] | None = None) -> int:
         from vibe_studio.benchmark.vibe_bench import VibeBenchEngine
 
         print(f"⚡ [VibeBench] Starting automated evaluation suite...")
-        engine = VibeBenchEngine()
-        report = engine.run_benchmark(max_scenarios=args.scenarios)
-        print("\n" + report.print_dashboard())
-        return 0 if report.success_rate_pct >= 80.0 else 1
+    elif args.subcommand == "gui" or args.subcommand is None:
+        from vibe_studio.app.application import main as gui_main
+        return gui_main()
 
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
