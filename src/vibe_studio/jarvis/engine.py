@@ -223,10 +223,87 @@ class JarvisCore:
             self.speak(spoken)
             res = JarvisResponse(spoken_text=spoken, action_taken="whatsapp_call", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": result})
+        # 1j. Live Weather: "hava necədir", "what is the weather in Baku"
+        if any(k in p for k in ["hava", "weather", "havanı göstər", "havanı öyrən"]):
+            m_city = re.search(r"(?:weather\s+in|hava)\s+([a-zA-ZçəğışöüÇƏĞIŞÖÜ]+)", p)
+            city = m_city.group(1) if m_city and m_city.group(1) not in ("necədir", "necedir", "haqqında", "today", "now") else "Baku"
+            result = self.system_tools.get_weather(city)
+            spoken = f"Live weather report: {result.get('report')}, sir." if not is_az else f"Hava məlumatı: {result.get('report')}, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="get_weather", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 1k. Brightness: "ekran parlaqlığını 80 faiz et", "set brightness to 75"
+        m_bright = re.search(r"(?:set\s+)?(?:brightness|parlaqlıq|parlaqlığı)\s+(?:to\s+)?(\d{1,3})", p)
+        if m_bright:
+            level = int(m_bright.group(1))
+            result = self.system_tools.set_brightness(level)
+            spoken = f"Screen brightness adjusted to {level} percent, sir." if not is_az else f"Ekran parlaqlığı {level} faizə qoyuldu, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_brightness", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 1l. Media Playback: "musiqini dayandır", "play music", "next track", "növbəti mahnı"
+        if any(k in p for k in ["pause music", "stop music", "musiqini dayandır", "musiqini saxla", "pauza"]):
+            result = self.system_tools.media_control("pause")
+            spoken = "Media paused, sir." if not is_az else "Musiqi dayandırıldı, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="media_control", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["play music", "resume music", "musiqini oxut", "musiqi çal", "davam et"]):
+            result = self.system_tools.media_control("play-pause")
+            spoken = "Resuming media playback, sir." if not is_az else "Musiqi oxunur, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="media_control", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["next song", "next track", "növbəti mahnı", "növbəti trek"]):
+            result = self.system_tools.media_control("next")
+            spoken = "Skipping to next track, sir." if not is_az else "Növbəti mahnıya keçirəm, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="media_control", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 1m. Telegram Message / Chat: "telegramdan tuncaya yaz salam"
+        m_tg = re.search(r"(?:telegramdan|telegramda|telegram)\s+([a-zA-Z0-9_]+)\s*(?:ya|yə|a|e)?\s*(?:yaz|mesaj\s+yaz)?\s*(.*)", p)
+        if m_tg and ("telegram" in p):
+            tgt = m_tg.group(1).strip()
+            tg_text = m_tg.group(2).strip()
+            if tgt not in ("open", "aç", "app", "application"):
+                result = self.system_tools.telegram_message(tgt, tg_text)
+                spoken = f"Opening Telegram chat with {tgt}, sir." if not is_az else f"{tgt} ilə Telegram çatı açılır, cənab."
+                self.speak(spoken)
+                res = JarvisResponse(spoken_text=spoken, action_taken="telegram_message", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+                self._emit("command_completed", {"response": spoken, "result": result})
+                return res
+
+        # 1n. Time & Date: "saat neçədir", "what time is it", "tarix nədir"
+        if any(p == k or p.startswith(k) for k in ["saat neçədir", "saat necedir", "saat neçə", "what time is it", "current time", "bu gün ayın neçəsidir", "tarix nədir", "today date"]):
+            now = datetime.datetime.now()
+            time_str = now.strftime("%H:%M")
+            date_str = now.strftime("%d.%m.%Y")
+            spoken = f"The time is {time_str}, today's date is {date_str}, sir." if not is_az else f"Hazırda saat {time_str}, bu günün tarixi {date_str}-dir, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="time_check", action_result={"time": time_str, "date": date_str}, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 1o. System Sleep: "yuxu rejimi", "suspend pc", "sleep mode"
+        if any(k in p for k in ["yuxu rejimi", "yuxuya get", "suspend", "sleep mode", "sleep pc"]):
+            result = self.system_tools.suspend_system()
+            spoken = "Putting system into suspend sleep mode, sir." if not is_az else "Kompüter yuxu rejiminə keçirilir, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="suspend_system", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
             return res
 
         # 2. Specific Speedtest / Fast.com intent
         if "fast.com" in p or "speedtest" in p or "speed test" in p:
+
 
 
             self.system_tools.open_url("https://fast.com")

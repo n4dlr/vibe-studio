@@ -304,6 +304,47 @@ def test_jarvis_whatsapp_message_command(tmp_path: Path):
     assert "tuncay" in resp.spoken_text.lower()
 
 
+def test_jarvis_weather_command(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("hava necədir")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "get_weather"
+    assert "Hava məlumatı" in resp.spoken_text or "weather" in resp.spoken_text.lower()
+
+
+def test_jarvis_brightness_command(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("ekran parlaqlığı 80")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "set_brightness"
+    assert "80" in resp.spoken_text
+
+
+def test_jarvis_media_control_command(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("musiqini dayandır")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "media_control"
+    assert "dayandırıldı" in resp.spoken_text
+
+
+def test_jarvis_telegram_command(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("telegramdan tuncaya yaz salam")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "telegram_message"
+    assert "tuncay" in resp.spoken_text.lower()
+
+
+def test_jarvis_time_check_command(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("saat neçədir")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "time_check"
+    assert "saat" in resp.spoken_text.lower()
+
+
+
 
 
 
