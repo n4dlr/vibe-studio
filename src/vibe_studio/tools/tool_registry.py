@@ -18,13 +18,16 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+from vibe_studio.tools.browser_tools import BrowserTools
 from vibe_studio.tools.code_tools import CodeTools
 from vibe_studio.tools.code_analysis_tools import CodeAnalysisTools
 from vibe_studio.tools.filesystem_tools import FilesystemTools
 from vibe_studio.tools.git_tools import GitTools
+from vibe_studio.tools.memory_tools import MemoryTools
 from vibe_studio.tools.patch_tools import PatchTools
 from vibe_studio.tools.search_tools import SearchTools
 from vibe_studio.tools.terminal_tools import TerminalTools
+from vibe_studio.tools.web_tools import WebTools
 
 
 class RiskLevel(str, Enum):
@@ -64,6 +67,9 @@ class ToolRegistry:
         self.terminal_tools = TerminalTools(self.workspace_root)
         self.git_tools = GitTools(self.workspace_root)
         self.code_analysis_tools = CodeAnalysisTools(self.workspace_root)
+        self.browser_tools = BrowserTools(self.workspace_root)
+        self.web_tools = WebTools(self.workspace_root)
+        self.memory_tools = MemoryTools(self.workspace_root)
         self._tools: dict[str, ToolDefinition] = {}
         self._register_default_tools()
 
@@ -567,6 +573,90 @@ class ToolRegistry:
         self.register("git_checkout", "Checkout a branch",
             {"branch_name": S("string", "Branch name")},
             self.git_tools.git_checkout, risk=R.HIGH)
+
+        # ── Browser Automation (Playwright) ───────────────────────────
+        self.register("browser_open", "Open a website in the automated browser",
+            {"url": S("string", "URL to open"),
+             "headless": S("boolean", "Headless browser mode", False, True)},
+            self.browser_tools.browser_open, risk=R.LOW)
+
+        self.register("browser_navigate", "Navigate current browser page to a new URL",
+            {"url": S("string", "Destination URL")},
+            self.browser_tools.browser_navigate, risk=R.LOW)
+
+        self.register("browser_click", "Click an element matching selector on the page",
+            {"selector": S("string", "CSS or XPath selector")},
+            self.browser_tools.browser_click, risk=R.LOW)
+
+        self.register("browser_type", "Type text into an input or textarea element",
+            {"selector": S("string", "CSS or XPath selector"),
+             "text": S("string", "Text to type"),
+             "clear_first": S("boolean", "Clear input before typing", False, True)},
+            self.browser_tools.browser_type, risk=R.LOW)
+
+        self.register("browser_extract_text", "Extract visible text from the browser page",
+            {"selector": S("string", "CSS selector to extract text from", False, "body"),
+             "max_chars": S("integer", "Maximum characters to return", False, 10000)},
+            self.browser_tools.browser_extract_text, risk=R.SAFE)
+
+        self.register("browser_screenshot", "Capture a screenshot of current browser page",
+            {"filename": S("string", "Filename/path for screenshot", False, "screenshot.png")},
+            self.browser_tools.browser_screenshot, risk=R.SAFE)
+
+        self.register("browser_evaluate_js", "Execute custom JavaScript inside the browser page",
+            {"script": S("string", "JavaScript code to execute")},
+            self.browser_tools.browser_evaluate_js, risk=R.MEDIUM)
+
+        self.register("browser_wait", "Wait for element to appear on page",
+            {"selector": S("string", "CSS selector to wait for"),
+             "timeout_ms": S("integer", "Timeout in milliseconds", False, 5000)},
+            self.browser_tools.browser_wait, risk=R.SAFE)
+
+        self.register("browser_console_logs", "Get recent console logs from browser",
+            {"limit": S("integer", "Number of logs", False, 20)},
+            self.browser_tools.browser_console_logs, risk=R.SAFE)
+
+        self.register("browser_close", "Close the automated browser",
+            {},
+            self.browser_tools.browser_close, risk=R.SAFE)
+
+        # ── Web Research (Fast HTTP) ──────────────────────────────────
+        self.register("web_fetch", "Fetch web page content directly via HTTP and convert to markdown",
+            {"url": S("string", "Web page URL to fetch"),
+             "max_chars": S("integer", "Max characters", False, 12000)},
+            self.web_tools.web_fetch, risk=R.SAFE)
+
+        self.register("web_search", "Search the web (DuckDuckGo) and return top results with snippets",
+            {"query": S("string", "Search query"),
+             "max_results": S("integer", "Number of results to return", False, 5)},
+            self.web_tools.web_search, risk=R.SAFE)
+
+        self.register("web_extract_links", "Extract all hyperlinks from a web page",
+            {"url": S("string", "Web page URL")},
+            self.web_tools.web_extract_links, risk=R.SAFE)
+
+        # ── Agent Persistent Memory ───────────────────────────────────
+        self.register("memory_save", "Save information or notes into persistent long-term memory",
+            {"key": S("string", "Unique key/title"),
+             "value": S("string", "Content to store"),
+             "category": S("string", "Category (architecture, docs, research, user)", False, "general")},
+            self.memory_tools.memory_save, risk=R.SAFE)
+
+        self.register("memory_read", "Read stored information by key from memory",
+            {"key": S("string", "Memory key to read")},
+            self.memory_tools.memory_read, risk=R.SAFE)
+
+        self.register("memory_list", "List all keys stored in agent memory",
+            {"category": S("string", "Optional category filter", False, None)},
+            self.memory_tools.memory_list, risk=R.SAFE)
+
+        self.register("memory_search", "Search memory for keyword or topic",
+            {"query": S("string", "Search keyword or phrase")},
+            self.memory_tools.memory_search, risk=R.SAFE)
+
+        self.register("memory_delete", "Delete a key from memory",
+            {"key": S("string", "Memory key to delete")},
+            self.memory_tools.memory_delete, risk=R.SAFE)
 
         # ── Plugin Extensions ──────────────────────────────────────────
         try:

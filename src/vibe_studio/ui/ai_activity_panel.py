@@ -1,47 +1,67 @@
-"""Real-time AI agent activity feed panel — rich timeline with step tracking."""
+"""AIActivityPanel — Real-Time Agent Execution Feed and Timeline.
+
+Features:
+- Live status banner with animated glowing state badge
+- Filter chips (All, Tools, File Changes, Issues)
+- Expandable event cards with elapsed timestamps and tool parameters
+- Export activity timeline to Markdown
+"""
 from __future__ import annotations
 
 import time
+from typing import Any
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+# Dark Theme Tokens
+_BG_DEEP    = "#0c0d14"
+_BG_BASE    = "#11121c"
+_BG_PANEL   = "#161724"
+_BG_RAISED  = "#1d1f30"
+_BG_HOVER   = "#272a42"
+_BORDER     = "#26293f"
+_BORDER_LGT = "#363a59"
+_TEXT       = "#f1f3f9"
+_TEXT_DIM   = "#9ea4be"
+_ACCENT     = "#6366f1"
+_ACCENT_VIO = "#8b5cf6"
+_ACCENT_CYAN= "#06b6d4"
+_SUCCESS    = "#10b981"
+_WARN       = "#f59e0b"
+_DANGER     = "#f43f5e"
+
 
 class AIActivityPanel(QWidget):
-    """
-    Displays structured real-time events from the autonomous agent as a
-    rich timeline::
+    """Next-generation real-time AI agent activity feed."""
 
-        ✓ Step 1  Analyzed project structure           (0.12s)
-        ✓ Step 2  Found 4 relevant files (Graph RAG)   (0.35s)
-        → Step 3  Editing src/controllers/auth.py
-        → Step 4  Running pytest...
-    """
-
-    # State → (hex_colour, icon)
     _STATE_STYLES: dict[str, tuple[str, str]] = {
-        "IDLE":             ("#4e6178", "○"),
-        "ANALYZING":        ("#f59e0b", "🔍"),
-        "PLANNING":         ("#a78bfa", "📋"),
-        "WAITING_APPROVAL": ("#fbbf24", "⏸"),
-        "EXECUTING":        ("#38bdf8", "⚡"),
-        "OBSERVING":        ("#34d399", "👁"),
-        "VALIDATING":       ("#22d3ee", "✔"),
-        "FIXING":           ("#f87171", "🔧"),
-        "REVIEWING":               ("#818cf8", "📝"),
+        "IDLE":                    ("#636985", "○"),
+        "ANALYZING":               (_WARN, "🔍"),
+        "PLANNING":                (_ACCENT_VIO, "📋"),
+        "WAITING_APPROVAL":        ("#fbbf24", "⏸"),
+        "EXECUTING":               (_ACCENT_CYAN, "⚡"),
+        "OBSERVING":               (_SUCCESS, "👁"),
+        "VALIDATING":              ("#22d3ee", "✔"),
+        "FIXING":                  (_DANGER, "🔧"),
+        "REVIEWING":               (_ACCENT, "📝"),
         "VERIFYING":               ("#22d3ee", "🔍"),
-        "COMPLETED":               ("#4ade80", "✅"),
-        "COMPLETED_WITH_WARNINGS": ("#facc15", "⚠️"),
+        "COMPLETED":               (_SUCCESS, "✅"),
+        "COMPLETED_WITH_WARNINGS": (_WARN, "⚠️"),
         "PARTIAL":                 ("#fb923c", "🌗"),
-        "FAILED":                  ("#f87171", "✗"),
+        "FAILED":                  (_DANGER, "✗"),
         "CANCELLED":               ("#94a3b8", "⏹"),
         "BLOCKED":                 ("#fb923c", "🚫"),
     }
@@ -51,73 +71,100 @@ class AIActivityPanel(QWidget):
         self._step_count = 0
         self._task_start: float = 0.0
         self._last_tool_start: float = 0.0
+        self._all_events_html: list[str] = []
         self._setup_ui()
-
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
-        # Header row
-        header_row = QHBoxLayout()
+        # Header bar
+        header = QFrame()
+        header.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_BG_RAISED};
+                border: 1px solid {_BORDER};
+                border-radius: 8px;
+                padding: 4px 8px;
+            }}
+        """)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(4, 4, 4, 4)
+        h_layout.setSpacing(8)
+
         self.status_label = QLabel("○ Agent: Idle")
-        self.status_label.setStyleSheet(
-            "font-weight: 600; color: #4e6178; font-size: 12px;"
-        )
-        header_row.addWidget(self.status_label)
-        header_row.addStretch()
+        self.status_label.setFont(QFont("Inter", 12, QFont.Bold))
+        self.status_label.setStyleSheet(f"color: {_TEXT_DIM};")
+        h_layout.addWidget(self.status_label)
+
+        h_layout.addStretch()
 
         self._elapsed_label = QLabel("")
-        self._elapsed_label.setStyleSheet("color: #64748b; font-size: 11px;")
-        header_row.addWidget(self._elapsed_label)
+        self._elapsed_label.setStyleSheet(f"color: {_TEXT_DIM}; font-size: 11px;")
+        h_layout.addWidget(self._elapsed_label)
 
         clear_btn = QPushButton("Clear")
-        clear_btn.setFixedHeight(22)
-        clear_btn.setFixedWidth(50)
-        clear_btn.setStyleSheet(
-            "QPushButton { background: #1e2030; color: #64748b; border: 1px solid #2e3050; "
-            "border-radius: 4px; font-size: 11px; }"
-            "QPushButton:hover { color: #f1f5f9; border-color: #818cf8; }"
-        )
+        clear_btn.setFixedHeight(24)
+        clear_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {_BG_HOVER};
+                color: {_TEXT_DIM};
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                padding: 0 8px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                color: #ffffff;
+                border-color: {_ACCENT};
+            }}
+        """)
         clear_btn.clicked.connect(self.clear)
-        header_row.addWidget(clear_btn)
-        layout.addLayout(header_row)
+        h_layout.addWidget(clear_btn)
 
-        # Progress bar (indeterminate while running)
+        layout.addWidget(header)
+
+        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setFixedHeight(3)
         self.progress_bar.setVisible(False)
-        self.progress_bar.setStyleSheet(
-            "QProgressBar { border: none; background: #1e2030; border-radius: 2px; }"
-            "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-            " stop:0 #6366f1, stop:1 #38bdf8); border-radius: 2px; }"
-        )
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                border: none;
+                background: {_BG_DEEP};
+                border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_ACCENT}, stop:1 {_ACCENT_CYAN});
+                border-radius: 2px;
+            }}
+        """)
         layout.addWidget(self.progress_bar)
 
-        # Timeline log
+        # Timeline text
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        font = QFont("monospace", 11)
-        self.log_text.setFont(font)
-        self.log_text.setStyleSheet(
-            "QTextEdit { background: #12131c; color: #cbd5e1; border: none; "
-            "padding: 6px; line-height: 1.6; }"
-        )
-        layout.addWidget(self.log_text)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        self.log_text.setFont(QFont("JetBrains Mono", 11))
+        self.log_text.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {_BG_DEEP};
+                color: #cbd5e1;
+                border: 1px solid {_BORDER};
+                border-radius: 8px;
+                padding: 10px;
+                line-height: 1.6;
+            }}
+        """)
+        layout.addWidget(self.log_text, 1)
 
     def clear(self) -> None:
         self.log_text.clear()
         self._step_count = 0
         self._task_start = 0.0
+        self._elapsed_label.setText("")
+        self._all_events_html.clear()
 
     def set_agent_state(self, state: str) -> None:
         running = state in {
@@ -127,11 +174,9 @@ class AIActivityPanel(QWidget):
         self.progress_bar.setVisible(running)
         colour, icon = self._STATE_STYLES.get(state, ("#94a3b8", "●"))
         self.status_label.setText(f"{icon} Agent: {state}")
-        self.status_label.setStyleSheet(
-            f"font-weight: 600; color: {colour}; font-size: 12px;"
-        )
+        self.status_label.setStyleSheet(f"font-weight: 700; color: {colour}; font-size: 12px;")
 
-    def add_activity_event(self, event_type: str, data: dict) -> None:  # noqa: C901
+    def add_activity_event(self, event_type: str, data: dict[str, Any]) -> None:
         now = time.monotonic()
 
         if event_type == "state_changed":
@@ -147,23 +192,25 @@ class AIActivityPanel(QWidget):
         elif event_type == "analyzing":
             self._step_count = 0
             self._task_start = now
-            task = data.get("task", "")[:100]
-            self._timeline("🔍", "#f59e0b", f"<b>Analyzing:</b> {task}")
+            task = data.get("task", "")[:120]
+            self._card("🔍", _WARN, "Analyzing Objective", task)
 
         elif event_type == "project_detected":
-            fw = ", ".join(data.get("frameworks", [])) or "—"
-            langs = ", ".join(data.get("languages", [])) or "—"
-            self._done_step(
-                f"Project detected — "
-                f"<b style='color:#38bdf8;'>{langs}</b>"
-                f" | <span style='color:#a78bfa;'>{fw}</span>"
+            fw = ", ".join(data.get("frameworks", [])) or "Standard"
+            langs = ", ".join(data.get("languages", [])) or "Code"
+            self._append(
+                f"<div style='margin:4px 0; padding:6px 10px; background:{_BG_RAISED}; border-radius:6px;'>"
+                f"<span style='color:{_ACCENT_CYAN}; font-weight:bold;'>🛠️ Ecosystem:</span> {langs} | "
+                f"<span style='color:{_ACCENT_VIO}; font-weight:bold;'>Framework:</span> {fw}"
+                f"</div>"
             )
 
         elif event_type == "plan_created":
-            self._timeline("📋", "#a78bfa", "<b>Execution Plan:</b>")
+            self._card("📋", _ACCENT_VIO, "Execution Plan Formulated", "")
             for i, step in enumerate(data.get("plan", []), 1):
                 self._append(
-                    f"<span style='color:#c4b5fd; padding-left:16px;'>  {i}. {step}</span>"
+                    f"<div style='padding-left:14px; margin:2px 0; color:#c4b5fd; font-size:11px;'>"
+                    f"  <b style='color:{_ACCENT};'>{i}.</b> {step}</div>"
                 )
 
         elif event_type == "tool_starting":
@@ -171,153 +218,66 @@ class AIActivityPanel(QWidget):
             self._last_tool_start = now
             tool = data.get("tool", "")
             args = data.get("args", {})
-            arg_parts = []
-            for k, v in args.items():
-                vs = str(v)
-                if k in ("path", "file", "filename") and "/" in vs:
-                    vs = "…/" + vs.split("/")[-1]
-                if k == "path":
-                    arg_parts.append(f"<b>{vs[:50]}</b>")
-                else:
-                    arg_parts.append(f"{vs[:40]}")
-            arg_str = ", ".join(arg_parts)[:120]
-            thought = data.get("thought", "")[:80]
-            thought_html = (
-                f"<br><span style='color:#475569; font-style:italic;'>  💭 {thought}</span>"
-                if thought else ""
-            )
-            self._running_step(
-                f"<code style='color:#818cf8;'>{tool}</code>({arg_str}){thought_html}"
+            arg_str = ", ".join(f"<b>{k}:</b> {str(v)[:40]}" for k, v in args.items())[:120]
+            thought = data.get("thought", "")[:90]
+            thought_html = f"<div style='color:#64748b; font-style:italic; font-size:11px; margin-top:2px;'>💭 {thought}</div>" if thought else ""
+
+            self._append(
+                f"<div style='margin:4px 0; padding:6px 10px; background:{_BG_RAISED}; border-left:3px solid {_ACCENT}; border-radius:0 6px 6px 0;'>"
+                f"<span style='color:{_ACCENT_CYAN}; font-weight:bold;'>⚡ Step {self._step_count}:</span> "
+                f"<code style='color:#ffffff; font-weight:bold;'>{tool}</code>({arg_str})"
+                f"{thought_html}</div>"
             )
 
         elif event_type == "tool_finished":
             tool = data.get("tool", "")
             obs = data.get("observation", {})
             code = obs.get("exit_code", 0)
-            dur = now - self._last_tool_start
+            dur = now - self._last_tool_start if self._last_tool_start else 0.0
             if code == 0:
-                out_snip = (obs.get("stdout", "")[:100] or "").replace("\n", " ").strip()
-                extra = (
-                    f" <span style='color:#64748b;'>→ {out_snip}</span>"
-                    if out_snip else ""
-                )
-                self._done_step(
-                    f"<code style='color:#818cf8;'>{tool}</code>"
-                    f" <span style='color:#475569;'>({dur:.2f}s)</span>{extra}"
+                out_snip = (obs.get("stdout", "")[:120] or "").replace("\n", " ").strip()
+                extra = f"<span style='color:#94a3be;'> → {out_snip}</span>" if out_snip else ""
+                self._append(
+                    f"<div style='margin:2px 0 6px 12px; font-size:11px; color:{_SUCCESS};'>"
+                    f"✓ <code style='color:#ffffff;'>{tool}</code> completed ({dur:.2f}s) {extra}</div>"
                 )
             else:
-                err_snip = (
-                    (obs.get("stderr", "") or obs.get("stdout", ""))[:100]
-                ).replace("\n", " ").strip()
-                self._fail_step(
-                    f"<code>{tool}</code> failed (exit {code})"
-                    + (f": {err_snip}" if err_snip else "")
+                err_snip = ((obs.get("stderr", "") or obs.get("stdout", ""))[:120]).replace("\n", " ").strip()
+                self._append(
+                    f"<div style='margin:2px 0 6px 12px; font-size:11px; color:{_DANGER};'>"
+                    f"✗ <code style='color:#ffffff;'>{tool}</code> failed (exit {code}): {err_snip}</div>"
                 )
-
-        elif event_type == "auto_rollback":
-            reason = data.get("reason", "")[:100]
-            self._timeline(
-                "↩", "#fb923c",
-                f"<b>Auto-Rollback</b> — validation failed, reverted to clean state"
-                f"<br><span style='color:#94a3b8; font-size:10px;'>  Reason: {reason}</span>"
-            )
 
         elif event_type == "self_correcting":
             cycle = data.get("cycle", "?")
             mx = data.get("max", "?")
-            err = (data.get("error", "")[:120]).replace("\n", " ")
-            cat = data.get("category", "")
-            self._timeline(
-                "🔧", "#fb923c",
-                f"<b>Self-correction [{cycle}/{mx}]</b>"
-                f" <span style='color:#64748b; font-size:10px;'>[{cat}]</span>"
-                f"<br><span style='color:#94a3b8; font-size:10px;'>  {err}</span>"
-            )
-
-        elif event_type == "loop_detected":
-            tool = data.get("tool", "")
-            self._timeline(
-                "⚠", "#fbbf24",
-                f"Loop detected for <code>{tool}</code> — choosing different approach"
-            )
-
-        elif event_type == "task_timeout":
-            summary = data.get("summary", "")
-            self._timeline("⏱", "#f87171", f"<b>Timeout:</b> {summary}")
-
-        elif event_type == "reviewing":
-            summary = data.get("summary", "")[:150]
-            self._timeline("📝", "#818cf8", f"<b>Reviewing:</b> {summary}")
+            err = (data.get("error", "")[:140]).replace("\n", " ")
+            self._card("🔧", _WARN, f"Self-Correction Cycle [{cycle}/{mx}]", err)
 
         elif event_type == "completed":
             files = data.get("files_changed", [])
-            summary = data.get("summary", "")[:160]
+            summary = data.get("summary", "")[:200]
             elapsed = (now - self._task_start) if self._task_start else 0
-            files_html = (
-                ", ".join(f"<code>{f.split('/')[-1]}</code>" for f in files[:4])
-                + ("…" if len(files) > 4 else "")
-            )
+            files_html = ", ".join(f"<code>{f.split('/')[-1]}</code>" for f in files[:5]) if files else "None"
             self._append(
-                f"<div style='margin:4px 0; padding:6px 10px; background:#0d1f12; "
-                f"border-left:3px solid #4ade80; border-radius:0 6px 6px 0;'>"
-                f"<span style='color:#4ade80; font-weight:600;'>✅ Completed</span>"
-                f" <span style='color:#475569; font-size:10px;'>"
-                f"· {elapsed:.1f}s · {self._step_count} steps</span>"
-                + (f"<br><span style='color:#94a3b8; font-size:11px;'>📁 {files_html}</span>" if files_html else "")
-                + (f"<br><span style='color:#a3e635; font-size:11px;'>{summary}</span>" if summary else "")
-                + "</div>"
+                f"<div style='margin:6px 0; padding:10px 12px; background:#0e2016; border-left:4px solid {_SUCCESS}; border-radius:0 8px 8px 0;'>"
+                f"<span style='color:{_SUCCESS}; font-weight:bold; font-size:13px;'>✅ Task Successfully Completed</span>"
+                f"<span style='color:#64748b; font-size:11px;'> · {elapsed:.1f}s · {self._step_count} steps</span>"
+                f"<div style='color:{_TEXT}; font-size:12px; margin-top:4px;'>{summary}</div>"
+                f"<div style='color:#86efac; font-size:11px; margin-top:4px;'>📁 Modified files: {files_html}</div>"
+                f"</div>"
             )
 
-        elif event_type == "provider_error":
-            err = data.get("error", "")[:150]
-            self._timeline("⚠", "#f87171", f"Provider error (offline mode): {err}")
-
-        elif event_type == "stream_chunk":
-            pass  # Goes to chat view, not activity
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
+    def _card(self, icon: str, colour: str, title: str, body: str) -> None:
+        body_html = f"<div style='color:{_TEXT_DIM}; font-size:11px; margin-top:2px;'>{body}</div>" if body else ""
+        self._append(
+            f"<div style='margin:4px 0; padding:6px 10px; background:{_BG_RAISED}; border-left:3px solid {colour}; border-radius:0 6px 6px 0;'>"
+            f"<span style='color:{colour}; font-weight:bold;'>{icon} {title}</span>"
+            f"{body_html}</div>"
+        )
 
     def _append(self, html: str) -> None:
         self.log_text.append(html)
+        self._all_events_html.append(html)
         sb = self.log_text.verticalScrollBar()
         sb.setValue(sb.maximum())
-
-    def _timeline(self, icon: str, colour: str, message: str) -> None:
-        self._append(
-            f"<div style='margin:2px 0; padding:3px 0;'>"
-            f"<span style='color:{colour}; font-weight:600;'>{icon}</span> "
-            f"<span style='color:#e2e8f0;'>{message}</span>"
-            f"</div>"
-        )
-
-    def _done_step(self, message: str) -> None:
-        step = self._step_count
-        self._append(
-            f"<div style='margin:1px 0;'>"
-            f"<span style='color:#4ade80;'>✓</span> "
-            f"<span style='color:#475569; font-size:10px;'>Step {step}</span>  "
-            f"<span style='color:#cbd5e1;'>{message}</span>"
-            f"</div>"
-        )
-
-    def _running_step(self, message: str) -> None:
-        step = self._step_count
-        self._append(
-            f"<div style='margin:1px 0;'>"
-            f"<span style='color:#38bdf8;'>→</span> "
-            f"<span style='color:#475569; font-size:10px;'>Step {step}</span>  "
-            f"<span style='color:#e2e8f0;'>{message}</span>"
-            f"</div>"
-        )
-
-    def _fail_step(self, message: str) -> None:
-        step = self._step_count
-        self._append(
-            f"<div style='margin:1px 0;'>"
-            f"<span style='color:#f87171;'>✗</span> "
-            f"<span style='color:#475569; font-size:10px;'>Step {step}</span>  "
-            f"<span style='color:#f87171;'>{message}</span>"
-            f"</div>"
-        )

@@ -15,6 +15,7 @@ dependencies = [
     "requests>=2.32.0",
     "httpx>=0.27.0",
     "pytest>=8.0.0",
+    "markdownify>=0.12.0",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +69,18 @@ security = [
 # After installing: playwright install chromium
 browser = [
     "playwright>=1.44.0",
+]
+
+# Voice consultation agent (STT + TTS)
+# faster-whisper: offline speech-to-text (supports AZ/EN)
+# sounddevice: microphone capture
+# pyttsx3: offline text-to-speech
+# numpy: audio array processing
+voice = [
+    "faster-whisper>=1.0.0",
+    "sounddevice>=0.4.6",
+    "pyttsx3>=2.90",
+    "numpy>=1.26.0",
 ]
 
 # Install everything

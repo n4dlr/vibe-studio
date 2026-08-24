@@ -263,16 +263,34 @@ class AutonomousAgent:
         steps: list[str] = []
         t = task.lower().strip()
 
-        # Check for conversational greeting / simple chat (short prompt without code keywords)
+        # Check for conversational / casual messages — no tools needed
+        _CONVO_TRIGGERS = {
+            "salam", "hello", "hi", "hey", "howdy",
+            "necəsən", "necesen", "necəsiniz", "nece",
+            "günaydın", "gunaydin", "iyi günler", "axşamınız",
+            "how are you", "how r u", "hows it going",
+            "what's up", "whats up", "sup",
+            "thanks", "thank you", "teşekkür", "sağ ol", "sagol",
+            "great", "nice", "cool", "awesome", "perfect",
+            "bye", "goodbye", "görüşərük", "hələlik",
+        }
         words = t.split()
-        is_greeting = (
-            len(t) < 40
-            and not any(k in t for k in ["create", "yarat", "yaz", "file", "fayl", "make", "code", "run", "delete", "sil"])
-            and any(w in words for w in ["salam", "hello", "hi", "hey", "sa", "necəsn", "necesen", "günaydın", "gunaydin"])
+        _has_code_kw = any(k in t for k in [
+            "create", "yarat", "yaz", "file", "fayl", "make", "code",
+            "run", "delete", "sil", "fix", "build", "test", "write",
+            "implement", "refactor", "class", "function", "def ",
+        ])
+        is_conversational = (
+            len(t) < 80
+            and not _has_code_kw
+            and (
+                any(trigger in t for trigger in _CONVO_TRIGGERS)
+                or (len(words) <= 5 and not _has_code_kw and "?" not in t)
+            )
         )
 
-        if is_greeting:
-            steps = ["İstifadəçi salamlaşmasının təhlili", "Cavabın hazırlanması"]
+        if is_conversational:
+            steps = ["Conversational reply"]
             plan = AgentPlan(
                 task=task, steps=steps, intent="greeting",
                 approval_required=False,
@@ -333,13 +351,25 @@ class AutonomousAgent:
         if self._cancel_requested:
             return AgentTaskResult(status=AgentState.CANCELLED, task=task, summary="Cancelled.", context=self.execution_context)
 
-        # ── Greeting fast-path ── immediately return without touching LLM or tools
+        # ── Conversational fast-path ── respond naturally without touching tools
         if plan.intent == "greeting":
-            greeting_response = (
-                "Salam! Mən Vibe Studio AI köməkçisiyəm. "
-                "Layihənizdə sizə necə kömək edə bilərəm?\n"
-                "Məsələn: fayl yaratmaq, kodu düzəltmək, testləri işə salmaq, refaktor etmək və s."
-            )
+            t_lower = task.lower().strip()
+            if any(w in t_lower for w in ["how are you", "how r u", "hows", "necəsən", "necesen", "nece"]):
+                greeting_response = (
+                    "Çox yaxşıyam, sağ ol! 😊 Sən necəsən?\n"
+                    "Mən Vibe Studio AI-yəm — layihəndə kömək etməyə hazıram.\n"
+                    "Nə etmək istəyirsən?"
+                )
+            elif any(w in t_lower for w in ["thanks", "thank you", "teşekkür", "sağ ol", "sagol"]):
+                greeting_response = "Xahiş edirəm! 🙏 Başqa bir şeyə kömək lazımdırmı?"
+            elif any(w in t_lower for w in ["bye", "goodbye", "görüşərük", "hələlik"]):
+                greeting_response = "Görüşənədək! 👋 Uğurlar!"
+            else:
+                greeting_response = (
+                    "Salam! Mən Vibe Studio AI köməkçisiyəm. 👋\n"
+                    "Layihənizdə sizə necə kömək edə bilərəm?\n"
+                    "Məsələn: fayl yaratmaq, kodu düzəltmək, testləri işə salmaq, refaktor etmək və s."
+                )
             self._set_state(AgentState.COMPLETED)
             self._emit("completed", {"summary": greeting_response, "files_changed": []})
             return AgentTaskResult(

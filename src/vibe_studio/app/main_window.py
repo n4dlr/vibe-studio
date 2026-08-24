@@ -48,8 +48,24 @@ from vibe_studio.ui.command_palette import CommandPaletteDialog
 from vibe_studio.ui.git_panel import GitPanel
 from vibe_studio.ui.problems_panel import ProblemsPanel
 from vibe_studio.ui.search_panel import SearchPanel
+from vibe_studio.ui.super_agent_panel import SuperAgentPanel
 from vibe_studio.ui.test_runner_panel import TestRunnerPanel
-from vibe_studio.ui.theme import apply_theme
+from vibe_studio.ui.theme import (
+    _ACCENT,
+    _BG_BASE,
+    _BG_DEEP,
+    _BG_HOVER,
+    _BG_PANEL,
+    _BG_RAISED,
+    _BORDER,
+    _DANGER,
+    _SUCCESS,
+    _TEXT,
+    _TEXT_DIM,
+    _TEXT_MUTED,
+    _WARN,
+    apply_theme,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +189,10 @@ class MainWindow(QMainWindow):
             "Inspect the Git diff and perform a comprehensive code review."))
         aim.addAction("Generate Tests", lambda: self._run_ai_prompt(
             "Generate comprehensive unit tests for the main project modules."))
+        aim.addSeparator()
+        aim.addAction("🚀 SuperAgent (Deep Autonomous)", self._open_super_agent, QKeySequence("Ctrl+Shift+S"))
+        aim.addAction("🎙️ Voice Consultation", self._open_voice_consultation, QKeySequence("Ctrl+Shift+V"))
+        aim.addSeparator()
         aim.addAction("Stop Agent", self._stop_agent, QKeySequence("Escape"))
 
         # Tools
@@ -239,16 +259,36 @@ class MainWindow(QMainWindow):
     def _build_activity_bar(self, parent_layout: QHBoxLayout) -> None:
         """Create vertical VS Code / Cursor style Activity Bar on the far left."""
         act_bar = QWidget()
-        act_bar.setFixedWidth(44)
-        act_bar.setStyleSheet(
-            "QWidget { background: #13141c; border-right: 1px solid #28293d; }"
-            "QPushButton { background: transparent; color: #8da1b4; border: none; border-radius: 6px; margin: 3px 4px; font-size: 16px; }"
-            "QPushButton:hover { background: #242536; color: #f8fafc; }"
-            "QPushButton:checked { background: #242536; color: #818cf8; border-left: 2px solid #6366f1; }"
-        )
+        act_bar.setFixedWidth(48)
+        act_bar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {_BG_DEEP};
+                border-right: 1px solid {_BORDER};
+            }}
+            QPushButton {{
+                background: transparent;
+                color: {_TEXT_DIM};
+                border: none;
+                border-radius: 8px;
+                margin: 2px 4px;
+                font-size: 18px;
+                padding: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: {_BG_HOVER};
+                color: #ffffff;
+            }}
+            QPushButton:checked {{
+                background-color: {_BG_RAISED};
+                color: {_ACCENT};
+                border-left: 3px solid {_ACCENT};
+                border-top-left-radius: 0;
+                border-bottom-left-radius: 0;
+            }}
+        """)
         vbox = QVBoxLayout(act_bar)
         vbox.setContentsMargins(0, 8, 0, 8)
-        vbox.setSpacing(8)
+        vbox.setSpacing(6)
 
         self._btn_explorer = QPushButton("📁")
         self._btn_explorer.setToolTip("Explorer (Ctrl+Shift+E)")
@@ -270,6 +310,21 @@ class MainWindow(QMainWindow):
         vbox.addWidget(self._btn_search)
         vbox.addWidget(self._btn_git)
         vbox.addStretch()
+
+        self._btn_super = QPushButton("🚀")
+        self._btn_super.setToolTip("SuperAgent Mission Control (Ctrl+Shift+S)")
+        self._btn_super.clicked.connect(self._open_super_agent)
+        vbox.addWidget(self._btn_super)
+
+        self._btn_voice = QPushButton("🎙️")
+        self._btn_voice.setToolTip("Voice Consultation (Ctrl+Shift+V)")
+        self._btn_voice.clicked.connect(self._open_voice_consultation)
+        vbox.addWidget(self._btn_voice)
+
+        self._btn_terminal = QPushButton("⬛")
+        self._btn_terminal.setToolTip("Toggle Terminal (Ctrl+`)")
+        self._btn_terminal.clicked.connect(self._toggle_bottom_panel)
+        vbox.addWidget(self._btn_terminal)
 
         self._btn_settings = QPushButton("⚙️")
         self._btn_settings.setToolTip("Settings")
@@ -301,7 +356,6 @@ class MainWindow(QMainWindow):
         self.file_model.setReadOnly(True)
         self.file_model.setFilter(QDir.AllEntries | QDir.NoDotAndDotDot)
         self.explorer.setModel(self.file_model)
-        # Hide size/type/date columns — only show name
         for col in range(1, 4):
             self.explorer.hideColumn(col)
         self.explorer.clicked.connect(self._open_selected_file_from_tree)
@@ -328,12 +382,42 @@ class MainWindow(QMainWindow):
         cl.setSpacing(0)
 
         # Breadcrumb Bar
-        self.breadcrumb_label = QLabel("  vibe-stuudio")
-        self.breadcrumb_label.setFixedHeight(26)
-        self.breadcrumb_label.setStyleSheet(
-            "QLabel { background: #1c1d2a; color: #9ca3af; padding: 2px 12px; font-family: system-ui, -apple-system, sans-serif; font-size: 11px; border-bottom: 1px solid #28293d; }"
-        )
-        cl.addWidget(self.breadcrumb_label)
+        breadcrumb_bar = QWidget()
+        breadcrumb_bar.setFixedHeight(30)
+        breadcrumb_bar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {_BG_DEEP};
+                border-bottom: 1px solid {_BORDER};
+            }}
+        """)
+        b_layout = QHBoxLayout(breadcrumb_bar)
+        b_layout.setContentsMargins(12, 0, 12, 0)
+        b_layout.setSpacing(8)
+
+        self.breadcrumb_label = QLabel("vibe-studio")
+        self.breadcrumb_label.setStyleSheet(f"color: {_TEXT_DIM}; font-size: 11px; font-weight: 500;")
+        b_layout.addWidget(self.breadcrumb_label, 1)
+
+        btn_run = QPushButton("▶ Run")
+        btn_run.setFixedHeight(20)
+        btn_run.setStyleSheet(f"""
+            QPushButton {{
+                background: {_BG_RAISED};
+                color: {_SUCCESS};
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                padding: 0 8px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: {_BG_HOVER};
+            }}
+        """)
+        btn_run.clicked.connect(self._run_current_editor_file)
+        b_layout.addWidget(btn_run)
+
+        cl.addWidget(breadcrumb_bar)
 
         self.editor_tabs = QTabWidget()
         self.editor_tabs.setTabsClosable(True)
@@ -344,16 +428,27 @@ class MainWindow(QMainWindow):
         cl.addWidget(self.editor_tabs)
         self._h_splitter.addWidget(center)
 
+    def _run_current_editor_file(self) -> None:
+        """Quickly execute active Python file in bottom terminal."""
+        w = self.editor_tabs.currentWidget()
+        if isinstance(w, EditorWidget) and getattr(w, "path", None):
+            self.terminal.execute_command(f"python {w.path}")
+
     def _on_editor_tab_changed(self, index: int) -> None:
         if index < 0:
-            self.breadcrumb_label.setText("  vibe-stuudio")
+            self.breadcrumb_label.setText("vibe-studio")
             return
         w = self.editor_tabs.widget(index)
         if isinstance(w, EditorWidget) and getattr(w, "path", None):
             p = Path(w.path)
             parts = p.parts[-4:]
-            icon = "🐍 " if p.suffix == ".py" else "🦀 " if p.suffix == ".rs" else "📝 " if p.suffix == ".md" else "⚙️ " if p.suffix in (".json", ".toml") else "📄 "
-            breadcrumb = "  " + "  ›  ".join(parts[:-1]) + f"  ›  {icon}<b>{parts[-1]}</b>" if len(parts) > 1 else f"  {icon}<b>{p.name}</b>"
+            icon_map = {
+                ".py": "🐍", ".rs": "🦀", ".ts": "⚡", ".tsx": "⚛️", ".js": "🟨",
+                ".html": "🌐", ".css": "🎨", ".md": "📝", ".json": "⚙️", ".toml": "⚙️",
+                ".yaml": "⚙️", ".yml": "⚙️", ".sh": "⬛", ".go": "🔷", ".sql": "🗄️"
+            }
+            icon = icon_map.get(p.suffix.lower(), "📄")
+            breadcrumb = " › ".join(parts[:-1]) + f" › <b>{icon} {parts[-1]}</b>" if len(parts) > 1 else f"<b>{icon} {p.name}</b>"
             self.breadcrumb_label.setText(breadcrumb)
 
     # ── Right AI panel ─────────────────────────────────────────────────
@@ -397,7 +492,9 @@ class MainWindow(QMainWindow):
 
         self.activity_panel = AIActivityPanel()
         self.changes_panel = _ChangesPanel()
+        self.super_agent_panel = SuperAgentPanel(self.settings.project_path or str(Path.cwd()), provider=self.chat_service._get_provider())
         self._ai_tabs.addTab(self.chat, "💬 Chat")
+        self._ai_tabs.addTab(self.super_agent_panel, "🚀 SuperAgent")
         self._ai_tabs.addTab(self.activity_panel, "⚡ Activity")
         self._ai_tabs.addTab(self.changes_panel, "📝 Changes")
         rl.addWidget(self._ai_tabs, 1)
@@ -484,15 +581,96 @@ class MainWindow(QMainWindow):
 
     def _setup_statusbar(self) -> None:
         self._status = QStatusBar()
+        self._status.setFixedHeight(26)
+        self._status.setStyleSheet(f"""
+            QStatusBar {{
+                background-color: {_BG_DEEP};
+                border-top: 1px solid {_BORDER};
+                color: {_TEXT_DIM};
+            }}
+        """)
         self.setStatusBar(self._status)
-        self._status_model_label = QLabel("  No model")
-        self._status_state_label = QLabel("Idle")
-        self._status.addPermanentWidget(self._status_model_label)
+
+        # Git branch chip
+        self._status_branch_pill = QLabel(" ⎇ main ")
+        self._status_branch_pill.setStyleSheet(f"""
+            QLabel {{
+                background: {_BG_RAISED};
+                color: #ffffff;
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                padding: 1px 6px;
+                font-weight: bold;
+                font-size: 11px;
+            }}
+        """)
+        self._status.addWidget(self._status_branch_pill)
+
+        # Agent state chip
+        self._status_state_label = QLabel(" 🟢 Agent Ready ")
+        self._status_state_label.setStyleSheet(f"""
+            QLabel {{
+                background: rgba(16, 185, 129, 0.15);
+                color: {_SUCCESS};
+                border: 1px solid rgba(16, 185, 129, 0.3);
+                border-radius: 4px;
+                padding: 1px 8px;
+                font-weight: 600;
+                font-size: 11px;
+            }}
+        """)
         self._status.addWidget(self._status_state_label)
-        self._status.showMessage("Vibe Studio ready.")
+
+        # Status text message
+        self._status_message_label = QLabel(" Vibe Studio ready")
+        self._status_message_label.setStyleSheet(f"color: {_TEXT_DIM}; font-size: 11px;")
+        self._status.addWidget(self._status_message_label, 1)
+
+        # LSP Diagnostics pill
+        self._status_diagnostics_label = QLabel(" ❌ 0  ⚠️ 0 ")
+        self._status_diagnostics_label.setStyleSheet(f"""
+            QLabel {{
+                background: {_BG_RAISED};
+                color: {_TEXT_DIM};
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                padding: 1px 6px;
+                font-size: 11px;
+            }}
+        """)
+        self._status.addPermanentWidget(self._status_diagnostics_label)
+
+        # Active Model pill
+        self._status_model_label = QLabel(" ⚡ llama3.1 ")
+        self._status_model_label.setStyleSheet(f"""
+            QLabel {{
+                background: rgba(99, 102, 241, 0.15);
+                color: {_ACCENT};
+                border: 1px solid rgba(99, 102, 241, 0.3);
+                border-radius: 4px;
+                padding: 1px 8px;
+                font-weight: 600;
+                font-size: 11px;
+            }}
+        """)
+        self._status.addPermanentWidget(self._status_model_label)
+
+        # Cursor Position / Encoding pill
+        self._status_cursor_label = QLabel(" Ln 1, Col 1 • UTF-8 • Spaces: 4 ")
+        self._status_cursor_label.setStyleSheet(f"""
+            QLabel {{
+                background: {_BG_RAISED};
+                color: {_TEXT_DIM};
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                padding: 1px 6px;
+                font-size: 11px;
+            }}
+        """)
+        self._status.addPermanentWidget(self._status_cursor_label)
 
     def _set_status(self, text: str) -> None:
-        self._status.showMessage(text)
+        self._status_message_label.setText(f" {text}")
 
     # ------------------------------------------------------------------
     # Keyboard shortcuts
@@ -509,6 +687,8 @@ class MainWindow(QMainWindow):
             ("Ctrl+`",       self._focus_terminal),
             ("Ctrl+Shift+F", self._focus_search),
             ("Ctrl+Shift+A", self._toggle_right_panel),
+            ("Ctrl+Shift+S", self._open_super_agent),
+            ("Ctrl+Shift+V", self._open_voice_consultation),
         ]
         for key, slot in shortcuts:
             sc = QShortcut(QKeySequence(key), self)
@@ -517,6 +697,33 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Shortcut actions
     # ------------------------------------------------------------------
+
+    def _open_super_agent(self) -> None:
+        """Switch to SuperAgent tab in AI panel and ensure panel is visible."""
+        if not self._right_widget.isVisible():
+            self._right_widget.show()
+        if hasattr(self, "super_agent_panel"):
+            idx = self._ai_tabs.indexOf(self.super_agent_panel)
+            if idx >= 0:
+                self._ai_tabs.setCurrentIndex(idx)
+                self.super_agent_panel._goal_input.setFocus()
+
+    def _open_voice_consultation(self) -> None:
+        """Open the Voice Consultation dialog (local AI voice agent)."""
+        from vibe_studio.ui.voice_dialog import VoiceConsultationDialog
+        provider = self.chat_service._get_provider()
+        workspace = self.settings.project_path or str(Path.cwd())
+        if not hasattr(self, "_voice_dialog") or self._voice_dialog is None:
+            self._voice_dialog = VoiceConsultationDialog(
+                provider=provider,
+                workspace_root=workspace,
+                parent=self,
+            )
+            # Reset reference when dialog is closed so it can be re-created
+            self._voice_dialog.finished.connect(lambda: setattr(self, "_voice_dialog", None))
+        self._voice_dialog.show()
+        self._voice_dialog.raise_()
+        self._voice_dialog.activateWindow()
 
     def _quick_open_file(self) -> None:
         """Quick-open dialog listing project files."""
@@ -760,7 +967,38 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_stream_chunk(self, chunk: str) -> None:
-        """Append streaming text incrementally to chat."""
+        """Append streaming text incrementally to chat, silently skipping tool-call JSON blobs."""
+        import re
+        # Buffer tool-call JSON that hasn't fully arrived yet
+        if not hasattr(self, "_stream_buf"):
+            self._stream_buf = ""
+        self._stream_buf += chunk
+
+        # If we're inside an accumulating JSON tool-call block, hold off
+        if '{"tool"' in self._stream_buf and '}' not in self._stream_buf:
+            return  # wait for closing brace
+
+        # Strip complete tool-call JSON objects from buffer
+        cleaned = re.sub(
+            r'\{[^{}]*"tool"\s*:\s*"[^"]*"[^{}]*"args"\s*:.*?\}',
+            "",
+            self._stream_buf,
+            flags=re.DOTALL,
+        )
+        # Strip ```json tool-call blocks
+        cleaned = re.sub(
+            r'```json\s*\{[^`]*"tool"[^`]*\}[^`]*```',
+            "",
+            cleaned,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+        output = cleaned.strip()
+        self._stream_buf = ""
+
+        if not output:
+            return  # pure tool-call chunk, nothing to show
+
         if not self._streaming_response:
             header_card = (
                 "<div style='margin:10px 16px 10px 0; background:#1a1b28; border:1px solid #28293d; "
@@ -771,12 +1009,14 @@ class MainWindow(QMainWindow):
             )
             self.chat.append(header_card)
             self._streaming_response = True
+
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        import html
-        cursor.insertHtml(html.escape(chunk).replace("\n", "<br>"))
+        import html as _html
+        cursor.insertHtml(_html.escape(output).replace("\n", "<br>"))
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
+
 
     def _reload_open_editors(self, files: list[str] | set[str] | str) -> None:
         """Reload any open editor tab matching changed files on disk."""
@@ -874,11 +1114,34 @@ class MainWindow(QMainWindow):
         self.chat.ensureCursorVisible()
 
     def _format_chat_markdown(self, text: str) -> str:
-        """Format markdown text into rich HTML for Qt QTextEdit rendering."""
+        """Format markdown text into rich HTML for Qt QTextEdit rendering.
+        Also strips raw tool-call JSON blobs so they never appear in chat.
+        """
         if not text:
             return ""
         import html
         import re
+
+        # ── Pre-process: strip raw tool-call JSON blobs ─────────────────────
+        # Remove ```json ... ``` blocks that look like tool calls
+        text = re.sub(
+            r'```json\s*\{\s*"tool"\s*:.*?```',
+            "",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        # Remove bare JSON objects that look like tool calls {"tool": ..., "args": ...}
+        text = re.sub(
+            r'\{\s*"tool"\s*:\s*"[^"]+"\s*,\s*"args"\s*:.*?\}',
+            "",
+            text,
+            flags=re.DOTALL,
+        )
+        # Remove lines that are just closing braces left over
+        text = re.sub(r'^\s*}\s*$', "", text, flags=re.MULTILINE)
+        text = text.strip()
+        # ────────────────────────────────────────────────────────────────────
+
         safe = html.escape(text)
 
         # 1. Code blocks: ```python ... ``` -> dark pre code card

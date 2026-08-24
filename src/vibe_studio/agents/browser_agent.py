@@ -177,7 +177,10 @@ class BrowserController:
         try:
             self._playwright = sync_playwright().start()
             launcher = getattr(self._playwright, bt)
-            self._browser = launcher.launch(headless=hl)
+            self._browser = launcher.launch(
+                headless=hl,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            )
             self._context = self._browser.new_context(viewport=self.viewport)
             self._page = self._context.new_page()
             self._page.set_default_timeout(self.default_timeout)

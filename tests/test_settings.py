@@ -24,9 +24,10 @@ def test_settings_round_trip(tmp_path: Path) -> None:
     assert loaded.providers[0].model == "llama3.1"
 
 
-def test_default_settings_include_ollama() -> None:
-    store = SettingsStore(Path("/tmp/test_vibe_settings.json"))
+def test_default_settings_include_ollama(tmp_path: Path) -> None:
+    store = SettingsStore(tmp_path / "fresh_settings.json")
     settings = store.load()
+    assert len(settings.providers) > 0
     assert settings.providers[0].kind == "ollama"
 
 
