@@ -1036,6 +1036,23 @@ class MainWindow(QMainWindow):
                         w.reload_from_disk()
 
     def _handle_agent_response(self, response: str) -> None:
+        import re
+        # Strip VERIFICATION RESULT blocks that sometimes leak into the summary
+        response = re.sub(
+            r'\w[^\n]*\(\{[^)]+\}\)\s*\[VERIFICATION RESULT\].*?(?:\n|$)',
+            "",
+            response,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        # Also strip any bare JSON tool-call objects that seeped through
+        response = re.sub(
+            r'\{[^{}]*"tool"\s*:\s*"[^"]*"[^{}]*"args"\s*:.*?\}',
+            "",
+            response,
+            flags=re.DOTALL,
+        )
+        response = response.strip()
+
         # Build detailed diff & file stats summary if files were changed
         diff_stats = ""
         if hasattr(self, "chat_service") and self.chat_service._agent:

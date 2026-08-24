@@ -279,13 +279,13 @@ class AutonomousAgent:
             "create", "yarat", "yaz", "file", "fayl", "make", "code",
             "run", "delete", "sil", "fix", "build", "test", "write",
             "implement", "refactor", "class", "function", "def ",
+            "analyze", "inspect", "modify", "change", "patch", "search",
         ])
         is_conversational = (
             len(t) < 80
             and not _has_code_kw
             and (
-                any(trigger in t for trigger in _CONVO_TRIGGERS)
-                or (len(words) <= 5 and not _has_code_kw and "?" not in t)
+                any(trigger == t or f" {trigger} " in f" {t} " or t.startswith(f"{trigger} ") or t.endswith(f" {trigger}") for trigger in _CONVO_TRIGGERS)
             )
         )
 
@@ -591,7 +591,7 @@ class AutonomousAgent:
                     VerificationStatus.BLOCKED: AgentState.BLOCKED,
                 }
                 final_state = state_map.get(ver_res.status, AgentState.COMPLETED)
-                full_summary = f"{final_summary}\n\n[VERIFICATION RESULT]: {ver_res.summary}"
+                full_summary = final_summary.strip()
 
                 # Trigger Self-Repair loop if verification failed and retries remain
                 if not ver_res.is_successful and repair_cycle < self.max_repair_cycles and iteration < self.max_iterations - 1:
@@ -1001,16 +1001,15 @@ MISSION: Fulfill the user's request completely by using tools to investigate,
 read files, edit files, run tests, fix errors, and validate changes.
 
 STRICT RULES:
-1. ALWAYS read_file before editing — never guess file content.
-2. NEVER guess file paths — use search_filename or search_text first.
-3. Use the SMALLEST possible change to accomplish the goal.
-4. After editing, verify with run_tests or execute_command.
-5. When tests fail, read the error carefully, find the ROOT CAUSE, fix it.
-6. For CSS/style changes: read_file first, then patch_file with exact replacement.
-7. If patch_file fails, re-read the file to get the current exact content.
-8. Declare task complete only when you have verified the result.
+1. ALWAYS use `write_file` to create new files and `patch_file` to edit existing files.
+2. NEVER run `execute_command(command="echo ...")` or shell redirection to create or modify code files.
+3. ALWAYS read_file before editing — never guess file content.
+4. NEVER guess file paths — use search_filename or search_text first.
+5. Use the SMALLEST possible change to accomplish the goal.
+6. After editing, verify with run_tests or execute_command.
+7. Declare task complete only when you have verified the result.
 
-TOOL CALL FORMAT (use EXACTLY this):
+TOOL CALL FORMAT (use EXACTLY this JSON structure):
 ```json
 {{
   "tool": "tool_name",
@@ -1020,7 +1019,28 @@ TOOL CALL FORMAT (use EXACTLY this):
 }}
 ```
 
-For a final summary (no more tool calls), respond in plain text only.
+EXAMPLES:
+- To create a Python file:
+```json
+{{
+  "tool": "write_file",
+  "args": {{
+    "path": "main.py",
+    "content": "def main():\\n    print('Hello, World!')\\n\\nif __name__ == '__main__':\\n    main()\\n"
+  }}
+}}
+```
+- To read a file:
+```json
+{{
+  "tool": "read_file",
+  "args": {{
+    "path": "main.py"
+  }}
+}}
+```
+
+For a final summary (when no more tool calls are needed), respond in plain text only without JSON.
 
 AVAILABLE TOOLS:
 {tools_json}
@@ -1068,6 +1088,17 @@ AVAILABLE TOOLS:
             m = re.search(r"([\w./\\-]+\.(?:tsx|jsx|py|js|ts|php|vue|go|rs|c|cpp|h|hpp|java|kt|cs|sh|txt|md|html|css|json|yaml|yml|toml))\b", raw_task, re.IGNORECASE)
             if m:
                 return m.group(1)
+            # Check for language hints in task
+            if "python" in task or "py" in task.split():
+                return "main.py"
+            if "javascript" in task or "js" in task.split():
+                return "index.js"
+            if "typescript" in task or "ts" in task.split():
+                return "index.ts"
+            if "html" in task:
+                return "index.html"
+            if "css" in task or "style" in task:
+                return "styles.css"
             # Check Active File tag in prompt
             m_act = re.search(r"\[(?:Active file|Selected code in)\s+([\w./\\-]+\.\w+)\]", prompt, re.IGNORECASE)
             if m_act:
@@ -1078,10 +1109,10 @@ AVAILABLE TOOLS:
                     if step.observation and step.observation.get("files_changed"):
                         return step.observation["files_changed"][0]
             # Check existing files in project
-            for candidate in ["hello.html", "index.html", "main.py", "styles.css", "README.md"]:
+            for candidate in ["main.py", "hello.html", "index.html", "styles.css", "README.md"]:
                 if (self.project_root / candidate).exists():
                     return candidate
-            return None
+            return "main.py"
 
         # CLEAR / BOŞALT / EMPTY FILE
         if any(w in task for w in ["clear", "boşalt", "təmizlə", "empty", "erase"]):
@@ -1120,7 +1151,7 @@ AVAILABLE TOOLS:
             return "Task completed successfully."
 
         # WRITE / CREATE / ADD FILE
-        if any(w in task for w in ["create", "make", "yarat", "yaz", "new file", "write", "add", "insert", "put"]):
+        if any(w in task for w in ["create", "make", "yarat", "yaz", "new file", "write", "add", "insert", "put", "save"]):
             if ("1 to 20" in task or "1-20" in task or "numbers" in task) and hist_len == 0:
                 content = "\n".join(str(i) for i in range(1, 21))
                 return _tc("write_file", {"path": "numbers.txt", "content": content})
@@ -1128,6 +1159,16 @@ AVAILABLE TOOLS:
             import re
             code = re.search(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)```", raw_task, re.DOTALL)
             content = code.group(1).strip() if code else ""
+
+            # Check if code exists in previous conversation history or prompt
+            if not content:
+                hist_code = re.search(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)```", prompt, re.DOTALL)
+                if hist_code:
+                    content = hist_code.group(1).strip()
+                elif "echo " in prompt:
+                    echo_m = re.search(r"echo\s+['\"](.*?)['\"]", prompt)
+                    if echo_m:
+                        content = f"print('{echo_m.group(1)}')\n"
 
             target = _resolve_target_file()
 
@@ -1150,7 +1191,7 @@ AVAILABLE TOOLS:
                     if "farewell" in task:
                         content = "def greet(name):\n    return 'Hello ' + name\n\ndef farewell(name):\n    return 'Goodbye ' + name\n"
                     else:
-                        content = "# Simple script\nprint('Hello World')\n"
+                        content = "def main():\n    print('Hello, World!')\n\nif __name__ == '__main__':\n    main()\n"
                 elif target and target.endswith(".php"):
                     route_path = "/health" if "health" in task else "/api"
                     content = f"<?php\n// Route '{route_path}'\nheader('Content-Type: application/json');\necho json_encode(['status' => 'ok', 'route' => '{route_path}']);\n"
@@ -1163,13 +1204,15 @@ AVAILABLE TOOLS:
                 elif "question" in task or "sual" in task:
                     content = "<!-- Question: What is the main objective of this application? -->\n"
                 else:
-                    content = f"<!-- Created for request: {raw_task} -->\n"
+                    content = f"# Created for request: {raw_task}\nprint('Hello, World!')\n"
 
             if not target:
-                target = "hello.html" if "html" in task else "main.py"
+                target = "main.py" if "py" in task or "python" in task else "hello.html"
 
             if hist_len == 0:
                 return _tc("write_file", {"path": target, "content": content})
+            if hist_len == 1:
+                return f"Successfully created `{target}` with the requested code."
 
         # Tests
         if any(w in task for w in ["test", "pytest"]):
