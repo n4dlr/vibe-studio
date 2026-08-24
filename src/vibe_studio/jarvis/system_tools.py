@@ -306,3 +306,123 @@ class JarvisSystemTools:
             }
         except Exception as e:
             return {"status": "error", "message": f"Git check failed: {e}"}
+
+    # ------------------------------------------------------------------
+    # Screen Lock
+    # ------------------------------------------------------------------
+
+    def lock_screen(self) -> dict[str, Any]:
+        """Lock the Linux desktop session immediately."""
+        # Priority order: loginctl (systemd), dm-tool (LightDM), gnome-screensaver, xdg-screensaver
+        attempts = [
+            ["loginctl", "lock-session"],
+            ["dm-tool", "lock"],
+            ["gnome-screensaver-command", "--lock"],
+            ["xdg-screensaver", "lock"],
+            ["xset", "s", "activate"],  # X11 screensaver
+        ]
+        for cmd in attempts:
+            if shutil.which(cmd[0]):
+                try:
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return {"status": "success", "method": cmd[0], "message": f"Screen locked using {cmd[0]}."}
+                except Exception:
+                    continue
+        return {"status": "error", "message": "No screen lock utility found on this system."}
+
+    # ------------------------------------------------------------------
+    # Contacts Book
+    # ------------------------------------------------------------------
+
+    @property
+    def _contacts_path(self) -> Path:
+        return Path.home() / ".jarvis_contacts.json"
+
+    def load_contacts(self) -> dict[str, str]:
+        """Load the J.A.R.V.I.S contacts book (name -> phone number)."""
+        import json
+        try:
+            if self._contacts_path.exists():
+                return json.loads(self._contacts_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    def save_contact(self, name: str, phone: str) -> dict[str, Any]:
+        """Save or update a contact in the J.A.R.V.I.S contacts book."""
+        import json
+        contacts = self.load_contacts()
+        normalized_name = name.strip().lower()
+        contacts[normalized_name] = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        self._contacts_path.write_text(json.dumps(contacts, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"status": "success", "name": name, "phone": contacts[normalized_name], "message": f"Saved contact {name}."}
+
+    def find_contact(self, name: str) -> str | None:
+        """Look up a contact by name (fuzzy match). Returns phone number or None."""
+        contacts = self.load_contacts()
+        query = name.strip().lower()
+        # Exact match first
+        if query in contacts:
+            return contacts[query]
+        # Partial / fuzzy match
+        for stored_name, phone in contacts.items():
+            if query in stored_name or stored_name in query:
+                return phone
+        return None
+
+    # ------------------------------------------------------------------
+    # WhatsApp (Call & Message)
+    # ------------------------------------------------------------------
+
+    def whatsapp_call(self, contact_name: str) -> dict[str, Any]:
+        """Open WhatsApp call for a contact by name.
+
+        Looks up the contact in the J.A.R.V.I.S address book and opens
+        WhatsApp Web with that contact's chat (click Call button to initiate).
+        If the contact is not in the book, opens WhatsApp Web for manual search.
+        """
+        phone = self.find_contact(contact_name)
+
+        if phone:
+            # WhatsApp wa.me deep link opens that contact's chat directly
+            # Strip non-digits, add country code if missing (default +994 Azerbaijan)
+            digits = re.sub(r"\D", "", phone)
+            if not digits.startswith("994") and len(digits) <= 10:
+                digits = "994" + digits.lstrip("0")
+            url = f"https://wa.me/{digits}"
+            result = self.open_url(url)
+            return {
+                "status": "success",
+                "contact": contact_name,
+                "phone": phone,
+                "url": url,
+                "message": f"Opening WhatsApp chat with {contact_name} ({phone}). Click the call button to start the call.",
+                "requires_manual_call_click": True,
+            }
+        else:
+            # Open WhatsApp Web — user can search manually
+            result = self.open_url("https://web.whatsapp.com")
+            return {
+                "status": "contact_not_found",
+                "contact": contact_name,
+                "message": f"Contact '{contact_name}' not found in address book. Opening WhatsApp Web — please search manually.",
+                "requires_manual_call_click": True,
+                "tip": f"Add contact: tell Jarvis 'save contact {contact_name} +994XXXXXXXXX'",
+            }
+
+    def whatsapp_message(self, contact_name: str, text: str) -> dict[str, Any]:
+        """Open WhatsApp with a pre-filled message to a contact."""
+        phone = self.find_contact(contact_name)
+        if phone:
+            digits = re.sub(r"\D", "", phone)
+            if not digits.startswith("994") and len(digits) <= 10:
+                digits = "994" + digits.lstrip("0")
+            encoded_text = urllib.parse.quote(text)
+            url = f"https://wa.me/{digits}?text={encoded_text}"
+            self.open_url(url)
+            return {"status": "success", "contact": contact_name, "message": f"Opening WhatsApp message to {contact_name}."}
+        else:
+            url = "https://web.whatsapp.com"
+            self.open_url(url)
+            return {"status": "contact_not_found", "contact": contact_name, "message": f"Contact '{contact_name}' not found. Opening WhatsApp Web."}
+

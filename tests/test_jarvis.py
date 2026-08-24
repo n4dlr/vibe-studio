@@ -272,6 +272,39 @@ def test_jarvis_full_agentic_write_file_execution(tmp_path: Path):
     assert "Əlbəttə, cənab" in resp.spoken_text
 
 
+def test_jarvis_lock_screen_command(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("cihazı kilidlə")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "lock_screen"
+    assert "kilidləyirəm" in resp.spoken_text
+
+
+def test_jarvis_save_contact_and_whatsapp_call(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    # 1. Save contact
+    resp_save = jarvis.execute_command("save contact tuncay +994501234567")
+    assert isinstance(resp_save, JarvisResponse)
+    assert resp_save.action_taken == "save_contact"
+    assert "tuncay" in resp_save.spoken_text
+
+    # 2. WhatsApp call
+    resp_call = jarvis.execute_command("whatsapdan tuncayi ara")
+    assert isinstance(resp_call, JarvisResponse)
+    assert resp_call.action_taken == "whatsapp_call"
+    assert resp_call.action_result.get("status") == "success"
+    assert "tuncay" in resp_call.spoken_text.lower()
+
+
+def test_jarvis_whatsapp_message_command(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("whatsapdan tuncaya yaz salam necesen")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "whatsapp_message"
+    assert "tuncay" in resp.spoken_text.lower()
+
+
+
 
 
 

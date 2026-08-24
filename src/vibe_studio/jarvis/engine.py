@@ -111,8 +111,9 @@ class JarvisCore:
         p = user_prompt.strip().lower()
         self._emit("command_received", {"prompt": user_prompt, "model": self.model})
 
-        # Check if Azerbaijani language prompt
-        is_az = any(w in p for w in ["salam", "necəsən", "yarat", "təmizlə", "bağla", "nədir", "necədir", "vəziyyət", "resurs", "işə sal", "sabahın", "axşamın", "cənab"])
+        # Check if Azerbaijani language prompt (letters or keywords)
+        is_az = any(c in p for c in "əışçğöü") or any(w in p for w in ["salam", "necesen", "yarat", "temizle", "bagla", "nedir", "necedir", "veziyyet", "ise sal", "sabahin", "axsamin", "cenab", "kilidle", "kilitle", "cihaz", "whatsapdan", "zeng"])
+
 
 
         # 1. Direct Time-aware Greetings (Single greeting only)
@@ -170,11 +171,63 @@ class JarvisCore:
             spoken = f"Searching Google for '{query}', sir."
             self.speak(spoken)
             res = JarvisResponse(spoken_text=spoken, action_taken="search_web", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
-            self._emit("command_completed", {"response": spoken})
+        # 1f. Screen Lock / Cihazı Kilidlə
+        if any(k in p for k in ["lock screen", "lock the screen", "lock computer", "lock pc", "lock device", "lock session", "cihazı kilitle", "cihazı kilidlə", "ekranı kilitle", "ekranı kilidlə", "kilitle", "kilidlə", "kompüteri kilidlə"]):
+            result = self.system_tools.lock_screen()
+            spoken = "Locking the screen now, sir." if not is_az else "Cihazı kilidləyirəm, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="lock_screen", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 1g. Save Contact: "save contact tuncay +994501234567"
+        m_save = re.search(r"(?:save\s+contact|kontakt\s+əlavə\s+et|kontakt\s+saxla|yadda\s+saxla)\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s+([\+0-9\s\-]+)", p)
+        if m_save:
+            cname = m_save.group(1).strip()
+            cphone = m_save.group(2).strip()
+            result = self.system_tools.save_contact(cname, cphone)
+            spoken = f"Saved contact {cname} with number {cphone}, sir." if not is_az else f"{cname} kontaktı {cphone} nömrəsi ilə yadda saxlanıldı, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="save_contact", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 1h. WhatsApp Message: "whatsapdan tuncaya yaz salam necesen"
+        m_wamsg = (
+            re.search(r"(?:whatsap+dan|whatsap+da|whatsapp)\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s*(?:ya|yə|a|e|na|nə)?\s*(?:yaz|mesaj\s+yaz|mesaj\s+göndər)\s+(.+)", p)
+            or re.search(r"send\s+whatsapp\s+message\s+to\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s+(?:saying\s+|with\s+text\s+|:\s*)?(.+)", p)
+        )
+        if m_wamsg:
+            cname = m_wamsg.group(1).strip()
+            msg_text = m_wamsg.group(2).strip()
+            result = self.system_tools.whatsapp_message(cname, msg_text)
+            spoken = f"Opening WhatsApp message to {cname}, sir." if not is_az else f"{cname} üçün WhatsApp mesajı açılır, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="whatsapp_message", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 1i. WhatsApp Call: "whatsapdan tuncayi ara", "whatsapp call tuncay", "call tuncay on whatsapp"
+        m_wacall = (
+            re.search(r"(?:whatsap+dan|whatsap+da|whatsapp)\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s*(?:i|ı|u|ü|ə|e|ya|yə|a|na|nə)?\s*(?:ara|zəng\s+et|zeng\s+et|call)", p)
+            or re.search(r"whatsapp\s+call\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)", p)
+            or re.search(r"call\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s+(?:on\s+|via\s+)?whatsapp", p)
+        )
+        if m_wacall:
+            cname = m_wacall.group(1).strip()
+            result = self.system_tools.whatsapp_call(cname)
+            if result.get("status") == "success":
+                spoken = f"Initiating WhatsApp call with {cname}, sir. Please click the call button on screen." if not is_az else f"{cname} ilə WhatsApp zəngi açıldı, ekranda zəng düyməsini klikləyin, cənab."
+            else:
+                spoken = f"Contact {cname} not found in address book, sir. Opening WhatsApp Web for manual search." if not is_az else f"{cname} kontakt kitabında tapılmadı, cənab. Əl ilə axtarış üçün WhatsApp Web açılır."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="whatsapp_call", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
             return res
 
         # 2. Specific Speedtest / Fast.com intent
         if "fast.com" in p or "speedtest" in p or "speed test" in p:
+
 
             self.system_tools.open_url("https://fast.com")
             net = self.system_tools.get_network_info()
@@ -394,6 +447,10 @@ class JarvisCore:
             "[TOOL: open_app(\"brave\" | \"tlauncher\" | \"steam\" | \"terminal\" | \"calculator\" | \"files\" | \"code\" | \"url\")]\n"
             "[TOOL: search_web(\"query\")]\n"
             "[TOOL: take_screenshot()]\n"
+            "[TOOL: lock_screen()]\n"
+            "[TOOL: whatsapp_call(\"contact_name\")]\n"
+            "[TOOL: whatsapp_message(\"contact_name\", \"message_text\")]\n"
+            "[TOOL: save_contact(\"contact_name\", \"phone_number\")]\n"
             "[TOOL: kill_process(\"name_or_pid\")]\n"
             "[TOOL: clean_cache()]\n"
             "[TOOL: get_network_info()]\n"
@@ -448,6 +505,19 @@ class JarvisCore:
                                 executed_actions[f"search_{query}"] = self.system_tools.search_web(query)
                             elif tool_name == "take_screenshot":
                                 executed_actions["screenshot"] = self.system_tools.take_screenshot()
+                            elif tool_name == "lock_screen":
+                                executed_actions["lock_screen"] = self.system_tools.lock_screen()
+                            elif tool_name == "whatsapp_call":
+                                cname = tool_arg.strip().strip('"\'')
+                                executed_actions[f"whatsapp_call_{cname}"] = self.system_tools.whatsapp_call(cname)
+                            elif tool_name == "whatsapp_message":
+                                m_wamsg_arg = re.match(r"""["']([^"']+)["']\s*,\s*["']?(.*)["']?""", tool_arg, re.DOTALL)
+                                if m_wamsg_arg:
+                                    executed_actions["whatsapp_message"] = self.system_tools.whatsapp_message(m_wamsg_arg.group(1), m_wamsg_arg.group(2))
+                            elif tool_name == "save_contact":
+                                m_sc_arg = re.match(r"""["']([^"']+)["']\s*,\s*["']?(.*)["']?""", tool_arg, re.DOTALL)
+                                if m_sc_arg:
+                                    executed_actions["save_contact"] = self.system_tools.save_contact(m_sc_arg.group(1), m_sc_arg.group(2))
                             elif tool_name == "kill_process":
                                 proc = tool_arg.strip().strip('"\'')
                                 executed_actions[f"kill_{proc}"] = self.system_tools.kill_process(proc)
@@ -457,6 +527,7 @@ class JarvisCore:
                                 executed_actions["network"] = self.system_tools.get_network_info()
                             elif tool_name == "get_system_diagnostics":
                                 executed_actions["diagnostics"] = self.telemetry.get_snapshot().to_dict()
+
 
                         return spoken_cleaned or "Executing your requested task, sir.", last_action, executed_actions, modified_files
 
