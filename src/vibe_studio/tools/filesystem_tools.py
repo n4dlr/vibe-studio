@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
+import json
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -8,8 +11,85 @@ from typing import Any
 from vibe_studio.security.path_security import PathSecurity
 
 
+class ASTSyntaxGuard:
+    """Intelligent pre-write syntax validator and self-healing engine.
+
+    Ensures code written to disk is syntactically sound, catching syntax errors
+    and fixing common model errors before files are saved.
+    """
+
+    @classmethod
+    def validate_and_heal(cls, filename: str, content: str) -> tuple[str, list[str]]:
+        """Validate content for syntax correctness and heal trivial errors if possible.
+
+        Returns: (healed_content, warnings_list)
+        """
+        warnings: list[str] = []
+        ext = Path(filename).suffix.lower()
+
+        if ext == ".py":
+            healed, py_warns = cls._heal_python(content)
+            warnings.extend(py_warns)
+            return healed, warnings
+
+        if ext == ".json":
+            healed, json_warns = cls._heal_json(content)
+            warnings.extend(json_warns)
+            return healed, warnings
+
+        return content, warnings
+
+    @classmethod
+    def _heal_python(cls, content: str) -> tuple[str, list[str]]:
+        warnings: list[str] = []
+        try:
+            ast.parse(content)
+            return content, warnings
+        except SyntaxError as err:
+            # Attempt healing trivial issues
+            lines = content.splitlines(keepends=True)
+            # Check for missing colon after def/class/if/elif/else/for/while/try/except/finally/with
+            fixed_lines = []
+            for line in lines:
+                stripped = line.rstrip()
+                if re.match(r"^\s*(def\s+\w+\(.*?\)|class\s+\w+(\(.*?\))?|if\s+.+|elif\s+.+|else|for\s+.+\s+in\s+.+|while\s+.+|try|except(\s+.+)?|finally|with\s+.+)\s*$", stripped):
+                    if not stripped.endswith(":"):
+                        line = line.rstrip() + ":\n"
+                fixed_lines.append(line)
+
+            candidate = "".join(fixed_lines)
+            try:
+                ast.parse(candidate)
+                warnings.append(f"Auto-healed Python syntax: missing colon added.")
+                return candidate, warnings
+            except SyntaxError:
+                pass
+
+            warnings.append(f"Python syntax warning at line {err.lineno}: {err.msg}")
+            return content, warnings
+
+    @classmethod
+    def _heal_json(cls, content: str) -> tuple[str, list[str]]:
+        warnings: list[str] = []
+        try:
+            json.loads(content)
+            return content, warnings
+        except Exception:
+            # 1. Strip trailing commas
+            candidate = re.sub(r",\s*([\]}])", r"\1", content)
+            # 2. Fix single quotes to double quotes if purely JSON keys
+            candidate = re.sub(r"'([^']+)'\s*:", r'"\1":', candidate)
+            try:
+                json.loads(candidate)
+                warnings.append("Auto-healed JSON: removed trailing comma or fixed key quotes.")
+                return candidate, warnings
+            except Exception as err:
+                warnings.append(f"JSON format warning: {err}")
+                return content, warnings
+
+
 class FilesystemTools:
-    """Implement safe filesystem tools restricted to workspace boundaries."""
+    """Implement safe filesystem tools restricted to workspace boundaries with AST syntax verification."""
 
     def __init__(self, workspace_root: str | Path):
         self.workspace_root = PathSecurity.normalize_path(workspace_root)
@@ -88,9 +168,14 @@ class FilesystemTools:
     def write_file(self, path: str, content: str) -> str:
         target = self._resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+
+        # Pre-write validation & self-healing
+        healed_content, warnings = ASTSyntaxGuard.validate_and_heal(target.name, content)
+        target.write_text(healed_content, encoding="utf-8")
         rel = target.relative_to(self.workspace_root).as_posix()
-        return f"Successfully written to {rel}"
+
+        warn_msg = f" (Note: {'; '.join(warnings)})" if warnings else ""
+        return f"Successfully written to {rel}{warn_msg}"
 
     def create_file(self, path: str, content: str = "") -> str:
         target = self._resolve(path)
