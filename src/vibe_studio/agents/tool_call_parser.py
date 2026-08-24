@@ -239,6 +239,56 @@ def _extract_tool_and_args(
     return tool_name, args
 
 
+_KNOWN_TOOL_NAMES = {
+    "execute_command", "run_tests", "run_build", "run_linter",
+    "read_file", "write_file", "create_file", "delete_file",
+    "patch_file", "file_exists", "list_directory", "list_dir",
+    "search_text", "search_files", "search_symbols",
+    "git_status", "git_diff", "git_commit", "git_stage", "git_unstage",
+    "browser_open", "browser_click", "browser_screenshot", "browser_extract_text",
+    "browser_evaluate_js", "browser_type", "browser_navigate",
+    "detect_project_type", "detect_frameworks", "detect_dependencies",
+}
+
+
+def _extract_parenthesized_calls(text: str) -> list[tuple[str, str, str, int, int]]:
+    """Extract tool_name(...) with proper parenthesis balancing across strings and nested calls."""
+    results: list[tuple[str, str, str, int, int]] = []
+    for m in re.finditer(r"\b([a-zA-Z0-9_]+)\s*\(", text):
+        tool_name = m.group(1)
+        if tool_name not in _KNOWN_TOOL_NAMES and not tool_name.endswith(("_file", "_command", "_test", "_search", "_tools")):
+            continue
+        start_idx = m.start()
+        open_paren_idx = m.end() - 1
+        depth = 1
+        in_str = None
+        escape = False
+        idx = open_paren_idx + 1
+        while idx < len(text) and depth > 0:
+            ch = text[idx]
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif in_str:
+                if ch == in_str:
+                    in_str = None
+            elif ch in ('"', "'"):
+                in_str = ch
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            idx += 1
+        if depth == 0:
+            inner = text[open_paren_idx + 1 : idx]
+            raw = text[start_idx : idx + 1]
+            results.append((tool_name, inner, raw, start_idx, idx + 1))
+    return results
+
+
 def parse_tool_calls(text: str) -> list[ParsedToolCall]:
     """
     Parse all tool calls from a model response.
@@ -315,7 +365,41 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
                 _add(ParsedToolCall(tool=name, args=args, raw=m.group(0), source="python_dict"),
                      m.start(), m.end())
 
-    # 6. Inline tool call prefix: tool_name{"args": ...} or tool_name({"filename": ...})
+    # 6. Function-style tool calls: tool_name({"key": "val"}) or tool_name(key="val")
+    for tool_name, inner, raw_str, s_idx, e_idx in _extract_parenthesized_calls(text):
+        if _overlaps(s_idx, e_idx):
+            continue
+        args = _try_parse_json(inner)
+        if args is None:
+            m_single = re.match(r'^\s*\{\s*["\']([a-zA-Z0-9_]+)["\']\s*:\s*["\']([\s\S]*?)["\']\s*\}\s*$', inner)
+            if m_single:
+                args = {m_single.group(1): m_single.group(2)}
+        if args is None:
+            try:
+                import ast
+                tree = ast.parse(f"{tool_name}({inner})")
+                if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Call):
+                    call_node = tree.body[0].value
+                    kwargs = {}
+                    for kw in call_node.keywords:
+                        if isinstance(kw.value, ast.Constant):
+                            kwargs[kw.arg] = kw.value.value
+                        else:
+                            try:
+                                kwargs[kw.arg] = ast.literal_eval(kw.value)
+                            except Exception:
+                                kwargs[kw.arg] = ast.unparse(kw.value)
+                    if kwargs:
+                        args = kwargs
+            except Exception:
+                pass
+        if args and isinstance(args, dict):
+            name, clean_args = _extract_tool_and_args({"tool": tool_name, "args": args})
+            if name:
+                _add(ParsedToolCall(tool=name, args=clean_args, raw=raw_str, source="function_call"),
+                     s_idx, e_idx)
+
+    # 7. Inline tool call prefix: tool_name{"args": ...} or tool_name{"path": ...}
     for m in _INLINE_TOOL_PREFIX.finditer(text):
         if _overlaps(m.start(), m.end()):
             continue
@@ -327,7 +411,7 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
                 _add(ParsedToolCall(tool=name, args=args, raw=m.group(0), source="inline_prefix"),
                      m.start(), m.end())
 
-    # 7. Top-level bare JSON response fallback
+    # 8. Top-level bare JSON response fallback
     if not calls:
         top_json = _try_parse_json(text)
         if isinstance(top_json, dict):

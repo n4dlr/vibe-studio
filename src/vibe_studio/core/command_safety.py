@@ -255,11 +255,31 @@ class CommandSafety:
             from vibe_studio.core.resource_manager import default_resource_manager
 
             start_new_session = os.name != "nt"
-            shell_needed = isinstance(command, str) and any(m in command for m in ("|", ">", "<", "&&", ";", "||"))
-            if isinstance(command, str) and not shell_needed:
-                cmd_args: str | list[str] = shlex.split(command)
+            cmd_clean = command.strip() if isinstance(command, str) else ""
+
+            # Check if model passed raw script or shebang as command
+            if cmd_clean.startswith("#!/usr/bin/env python") or cmd_clean.startswith("#!/usr/bin/python"):
+                code_body = re.sub(r"^#!.*?\n", "", cmd_clean).strip()
+                if not code_body:
+                    code_body = re.sub(r"^#!/usr/bin/env\s+python3?\s*", "", cmd_clean).strip()
+                cmd_args: str | list[str] = ["python3", "-c", code_body]
+                shell_needed = False
+            elif cmd_clean.startswith(("def ", "import ", "from ", "class ", "print(")):
+                cmd_args = ["python3", "-c", cmd_clean]
+                shell_needed = False
+            elif isinstance(command, str):
+                shell_needed = any(m in command for m in ("|", ">", "<", "&&", ";", "||", "\n", "$", "`", "(", ")"))
+                if not shell_needed:
+                    try:
+                        cmd_args = shlex.split(command)
+                    except Exception:
+                        cmd_args = command
+                        shell_needed = True
+                else:
+                    cmd_args = command
             else:
                 cmd_args = command
+                shell_needed = False
 
             proc = subprocess.Popen(
                 cmd_args,

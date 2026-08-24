@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFileSystemModel,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -44,12 +45,17 @@ from vibe_studio.filesystem.file_watcher import WorkspaceFileWatcher
 from vibe_studio.filesystem.project_manager import ProjectManager
 from vibe_studio.terminal.terminal_widget import TerminalWidget
 from vibe_studio.ui.ai_activity_panel import AIActivityPanel
+from vibe_studio.ui.canvas_panel import CanvasPanel
 from vibe_studio.ui.command_palette import CommandPaletteDialog
 from vibe_studio.ui.git_panel import GitPanel
+from vibe_studio.ui.jarvis_hud import JarvisHUDPanel
+from vibe_studio.ui.knowledge_graph_panel import KnowledgeGraphPanel
+from vibe_studio.ui.memory_graph_panel import MemoryGraphPanel
 from vibe_studio.ui.problems_panel import ProblemsPanel
 from vibe_studio.ui.search_panel import SearchPanel
 from vibe_studio.ui.super_agent_panel import SuperAgentPanel
 from vibe_studio.ui.test_runner_panel import TestRunnerPanel
+from vibe_studio.ui.workflow_panel import WorkflowPanel
 from vibe_studio.ui.theme import (
     _ACCENT,
     _BG_BASE,
@@ -189,9 +195,9 @@ class MainWindow(QMainWindow):
             "Inspect the Git diff and perform a comprehensive code review."))
         aim.addAction("Generate Tests", lambda: self._run_ai_prompt(
             "Generate comprehensive unit tests for the main project modules."))
-        aim.addSeparator()
         aim.addAction("🚀 SuperAgent (Deep Autonomous)", self._open_super_agent, QKeySequence("Ctrl+Shift+S"))
         aim.addAction("🎙️ Voice Consultation", self._open_voice_consultation, QKeySequence("Ctrl+Shift+V"))
+        aim.addAction("🤖 J.A.R.V.I.S Cockpit", lambda: self._switch_left_tab(7), QKeySequence("Ctrl+Shift+J"))
         aim.addSeparator()
         aim.addAction("Stop Agent", self._stop_agent, QKeySequence("Escape"))
 
@@ -306,9 +312,39 @@ class MainWindow(QMainWindow):
         self._btn_git.setCheckable(True)
         self._btn_git.clicked.connect(lambda: self._switch_left_tab(2))
 
+        self._btn_graph = QPushButton("🕸️")
+        self._btn_graph.setToolTip("Knowledge & Code Graph (Obsidian Engine)")
+        self._btn_graph.setCheckable(True)
+        self._btn_graph.clicked.connect(lambda: self._switch_left_tab(3))
+
+        self._btn_workflow = QPushButton("⚡")
+        self._btn_workflow.setToolTip("Visual Automation Studio (n8n Engine)")
+        self._btn_workflow.setCheckable(True)
+        self._btn_workflow.clicked.connect(lambda: self._switch_left_tab(4))
+
+        self._btn_canvas = QPushButton("📋")
+        self._btn_canvas.setToolTip("Whiteboard Canvas (Obsidian Format)")
+        self._btn_canvas.setCheckable(True)
+        self._btn_canvas.clicked.connect(lambda: self._switch_left_tab(5))
+
+        self._btn_memory = QPushButton("🧠")
+        self._btn_memory.setToolTip("Agent Memory Graph & ADR Browser")
+        self._btn_memory.setCheckable(True)
+        self._btn_memory.clicked.connect(lambda: self._switch_left_tab(6))
+
+        self._btn_jarvis = QPushButton("🤖")
+        self._btn_jarvis.setToolTip("J.A.R.V.I.S Autonomous Cockpit (Ctrl+Shift+J)")
+        self._btn_jarvis.setCheckable(True)
+        self._btn_jarvis.clicked.connect(lambda: self._switch_left_tab(7))
+
         vbox.addWidget(self._btn_explorer)
         vbox.addWidget(self._btn_search)
         vbox.addWidget(self._btn_git)
+        vbox.addWidget(self._btn_graph)
+        vbox.addWidget(self._btn_workflow)
+        vbox.addWidget(self._btn_canvas)
+        vbox.addWidget(self._btn_memory)
+        vbox.addWidget(self._btn_jarvis)
         vbox.addStretch()
 
         self._btn_super = QPushButton("🚀")
@@ -334,18 +370,106 @@ class MainWindow(QMainWindow):
         parent_layout.addWidget(act_bar)
 
     def _switch_left_tab(self, index: int) -> None:
-        btns = [self._btn_explorer, self._btn_search, self._btn_git]
+        btns = [
+            self._btn_explorer,
+            self._btn_search,
+            self._btn_git,
+            self._btn_graph,
+            self._btn_workflow,
+            self._btn_canvas,
+            self._btn_memory,
+            self._btn_jarvis,
+        ]
+        titles = [
+            "📁 EXPLORER",
+            "🔍 SEARCH",
+            "⎇ SOURCE CONTROL",
+            "🕸️ KNOWLEDGE GRAPH",
+            "⚡ AUTOMATION WORKFLOWS",
+            "📋 WHITEBOARD CANVAS",
+            "🧠 AGENT MEMORY & ADRs",
+            "🤖 J.A.R.V.I.S COCKPIT",
+        ]
         for i, b in enumerate(btns):
             b.setChecked(i == index)
-        if self._left_tabs.currentIndex() == index and self._left_tabs.isVisible():
-            self._left_tabs.setVisible(False)
+        if self._left_tabs.currentIndex() == index and self._left_sidebar_container.isVisible():
+            self._left_sidebar_container.setVisible(False)
         else:
-            self._left_tabs.setVisible(True)
+            self._left_sidebar_container.setVisible(True)
             self._left_tabs.setCurrentIndex(index)
+            if 0 <= index < len(titles):
+                self._sidebar_title.setText(titles[index])
+            if index == 3 and hasattr(self, "knowledge_graph_panel"):
+                self.knowledge_graph_panel.refresh_graph()
+            elif index == 6 and hasattr(self, "memory_graph_panel"):
+                self.memory_graph_panel.refresh()
+
+    def _on_sidebar_action(self) -> None:
+        idx = self._left_tabs.currentIndex()
+        if idx == 0:
+            self._on_workspace_changed(self.settings.project_path or ".")
+        elif idx == 1:
+            self.search_panel._execute_search()
+        elif idx == 2:
+            self.refresh_git_status()
+        elif idx == 3:
+            self.knowledge_graph_panel.refresh_graph()
+        elif idx == 4:
+            self.workflow_panel.execute_workflow()
+        elif idx == 5:
+            self.canvas_panel._add_sticky_note()
+        elif idx == 6:
+            self.memory_graph_panel.refresh()
 
     # ── Left sidebar ───────────────────────────────────────────────────
     def _build_left_sidebar(self) -> None:
+        self._left_sidebar_container = QWidget()
+        l_layout = QVBoxLayout(self._left_sidebar_container)
+        l_layout.setContentsMargins(0, 0, 0, 0)
+        l_layout.setSpacing(0)
+
+        # Header with title and quick actions (Replaces duplicate tab bar!)
+        self._sidebar_header = QWidget()
+        self._sidebar_header.setFixedHeight(34)
+        self._sidebar_header.setStyleSheet(f"""
+            QWidget {{
+                background-color: {_BG_RAISED};
+                border-bottom: 1px solid {_BORDER};
+            }}
+        """)
+        sh_layout = QHBoxLayout(self._sidebar_header)
+        sh_layout.setContentsMargins(12, 0, 8, 0)
+        sh_layout.setSpacing(6)
+
+        self._sidebar_title = QLabel("📁 EXPLORER")
+        self._sidebar_title.setStyleSheet(f"color: {_TEXT_DIM}; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;")
+        sh_layout.addWidget(self._sidebar_title, 1)
+
+        self._sidebar_action_btn = QPushButton("↻")
+        self._sidebar_action_btn.setFixedSize(22, 22)
+        self._sidebar_action_btn.setToolTip("Refresh View")
+        self._sidebar_action_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: {_TEXT_MUTED};
+                border: 1px solid transparent;
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: {_BG_HOVER};
+                color: #ffffff;
+                border-color: {_BORDER};
+            }}
+        """)
+        self._sidebar_action_btn.clicked.connect(self._on_sidebar_action)
+        sh_layout.addWidget(self._sidebar_action_btn)
+
+        l_layout.addWidget(self._sidebar_header)
+
         self._left_tabs = QTabWidget()
+        self._left_tabs.tabBar().hide()  # Cleanly hides duplicate tabs!
 
         # Explorer
         self.explorer = QTreeView()
@@ -369,10 +493,33 @@ class MainWindow(QMainWindow):
         # Git panel
         self.git_panel = GitPanel()
 
-        self._left_tabs.addTab(self.explorer, "📁 Explorer")
-        self._left_tabs.addTab(self.search_panel, "🔍 Search")
-        self._left_tabs.addTab(self.git_panel, "⎇ Git")
-        self._h_splitter.addWidget(self._left_tabs)
+        # Obsidian Knowledge Graph
+        self.knowledge_graph_panel = KnowledgeGraphPanel(self.settings.project_path or str(Path.cwd()))
+        self.knowledge_graph_panel.file_open_requested.connect(self.open_file)
+
+        # n8n Visual Workflow Studio
+        self.workflow_panel = WorkflowPanel(self.settings.project_path or str(Path.cwd()))
+
+        # Obsidian Canvas Whiteboard
+        self.canvas_panel = CanvasPanel(self.settings.project_path or str(Path.cwd()))
+
+        # Agent Memory Graph & ADR Browser
+        self.memory_graph_panel = MemoryGraphPanel(self.settings.project_path or str(Path.cwd()))
+
+        # J.A.R.V.I.S Autonomous Cockpit & Voice Agent
+        self.jarvis_hud_panel = JarvisHUDPanel(self.settings.project_path or str(Path.cwd()))
+
+        self._left_tabs.addTab(self.explorer, "Explorer")
+        self._left_tabs.addTab(self.search_panel, "Search")
+        self._left_tabs.addTab(self.git_panel, "Git")
+        self._left_tabs.addTab(self.knowledge_graph_panel, "Graph")
+        self._left_tabs.addTab(self.workflow_panel, "Workflows")
+        self._left_tabs.addTab(self.canvas_panel, "Canvas")
+        self._left_tabs.addTab(self.memory_graph_panel, "Memory")
+        self._left_tabs.addTab(self.jarvis_hud_panel, "JARVIS")
+
+        l_layout.addWidget(self._left_tabs, 1)
+        self._h_splitter.addWidget(self._left_sidebar_container)
 
     # ── Editor center ──────────────────────────────────────────────────
     def _build_editor_area(self) -> None:
@@ -458,22 +605,55 @@ class MainWindow(QMainWindow):
         rl.setContentsMargins(8, 8, 8, 8)
         rl.setSpacing(6)
 
-        # Model / mode header
-        model_row = QHBoxLayout()
-        self.model_combo = QComboBox()
-        self.model_combo.setMinimumWidth(160)
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Auto Mode", "Plan Mode", "Ask Mode"])
-        model_row.addWidget(QLabel("Model:"))
-        model_row.addWidget(self.model_combo, 1)
-        model_row.addWidget(self.mode_combo)
-        rl.addLayout(model_row)
+        # Model / mode header — compact unified glassmorphic bar
+        model_bar = QFrame()
+        model_bar.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_BG_RAISED};
+                border: 1px solid {_BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        model_row = QHBoxLayout(model_bar)
+        model_row.setContentsMargins(6, 4, 6, 4)
+        model_row.setSpacing(6)
 
-        # Refresh model button
-        ref_btn = QPushButton("↻ Refresh Models")
-        ref_btn.setFixedHeight(26)
+        model_icon = QLabel("🤖")
+        model_icon.setStyleSheet("font-size: 13px;")
+        model_row.addWidget(model_icon)
+
+        self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(120)
+        self.model_combo.setStyleSheet(f"background: {_BG_PANEL}; color: {_TEXT}; border: 1px solid {_BORDER}; border-radius: 4px; padding: 3px 6px; font-size: 11px;")
+        model_row.addWidget(self.model_combo, 1)
+
+        ref_btn = QPushButton("↻")
+        ref_btn.setFixedSize(24, 24)
+        ref_btn.setToolTip("Refresh Models")
+        ref_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {_BG_PANEL};
+                color: {_TEXT_MUTED};
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: {_BG_HOVER};
+                color: #ffffff;
+                border-color: {_ACCENT};
+            }}
+        """)
         ref_btn.clicked.connect(self._refresh_model_selector)
-        rl.addWidget(ref_btn)
+        model_row.addWidget(ref_btn)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["⚡ Auto", "📋 Plan", "❓ Ask"])
+        self.mode_combo.setStyleSheet(f"background: {_BG_PANEL}; color: {_ACCENT}; border: 1px solid {_BORDER}; border-radius: 4px; padding: 3px 6px; font-size: 11px; font-weight: bold;")
+        model_row.addWidget(self.mode_combo)
+
+        rl.addWidget(model_bar)
 
         # AI tabs — Chat / Activity
         self._ai_tabs = QTabWidget()
@@ -689,6 +869,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+Shift+A", self._toggle_right_panel),
             ("Ctrl+Shift+S", self._open_super_agent),
             ("Ctrl+Shift+V", self._open_voice_consultation),
+            ("Ctrl+Shift+J", lambda: self._switch_left_tab(7)),
         ]
         for key, slot in shortcuts:
             sc = QShortcut(QKeySequence(key), self)
@@ -1154,6 +1335,10 @@ class MainWindow(QMainWindow):
             text,
             flags=re.DOTALL,
         )
+        # Remove raw verification result strings and execution leaks
+        text = re.sub(r'\[VERIFICATION RESULT\].*?(\n|$)', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'execute_command\(.*?\)', '', text, flags=re.DOTALL)
+        text = re.sub(r'📁 Modified files:.*', '', text, flags=re.IGNORECASE)
         # Remove lines that are just closing braces left over
         text = re.sub(r'^\s*}\s*$', "", text, flags=re.MULTILINE)
         text = text.strip()

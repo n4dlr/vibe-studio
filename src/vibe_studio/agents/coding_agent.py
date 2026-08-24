@@ -58,6 +58,7 @@ from vibe_studio.providers.capability_detector import (
 from vibe_studio.security.permission_broker import PermissionBroker
 from vibe_studio.security.sensitive_file_detector import SensitiveFileDetector
 from vibe_studio.tools.tool_registry import ToolRegistry, default_tool_registry
+from vibe_studio.knowledge.memory_graph import AgentMemoryGraph, MemoryKind
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +182,7 @@ class AutonomousAgent:
         self.context_engine = ContextEngine(self.project_root)
         self.scanner = ProjectScanner(self.project_root)
         self.memory = ProjectMemory(self.project_root)
+        self.memory_graph = AgentMemoryGraph(self.project_root)
         self.checkpoint_system = CheckpointSystem(self.project_root)
         self.permission_broker = PermissionBroker(self.project_root)
         self.stuck_detector = StuckAgentDetector()
@@ -566,6 +568,36 @@ class AutonomousAgent:
             calls = parse_tool_calls(response_text)
             thought = strip_tool_calls(response_text, calls)
 
+            # Auto-synthesize write_file tool call if model emitted markdown code block for file creation request
+            if not calls:
+                import re
+                code_blocks = re.findall(r"```([a-zA-Z0-9_\-\+]*)\n([\s\S]*?)```", response_text)
+                target_f = None
+                f_matches = re.findall(r"[\w/\-]+\.(?:py|js|ts|tsx|jsx|php|vue|go|rs|c|cpp|h|html|css|json|yaml|yml|toml|txt|md|sh)\b", task, re.IGNORECASE)
+                if f_matches:
+                    target_f = f_matches[0]
+                elif any(k in task.lower() for k in ["python", "py file", "python file", "script"]):
+                    target_f = "main.py"
+                elif any(k in task.lower() for k in ["javascript", "js file"]):
+                    target_f = "index.js"
+                elif any(k in task.lower() for k in ["typescript", "ts file"]):
+                    target_f = "index.ts"
+                elif any(k in task.lower() for k in ["html", "html file"]):
+                    target_f = "index.html"
+                elif any(k in task.lower() for k in ["create", "yarat", "yaz", "write", "make"]) and code_blocks:
+                    ext = code_blocks[0][0].lower() or "py"
+                    target_f = f"main.{ext}" if ext not in ("python", "") else "main.py"
+
+                if target_f and code_blocks:
+                    code_content = code_blocks[0][1].strip()
+                    calls.append(ParsedToolCall(
+                        tool="write_file",
+                        args={"path": target_f, "content": code_content},
+                        raw=response_text,
+                        source="synthesized_code_block"
+                    ))
+                    thought = f"Writing code to {target_f}"
+
             if not calls:
                 # No tool calls → run verification engine before completing
                 self._set_state(AgentState.REVIEWING)
@@ -700,6 +732,26 @@ class AutonomousAgent:
                         if fc:
                             files_changed.add(str(fc))
                             self.execution_context.record_file_change(str(fc))
+
+                # If execute_command was run, check for redirected files (> filename) or echo content
+                if call.tool == "execute_command":
+                    cmd_str = call.args.get("command", "")
+                    m_redir = re.search(r'>\s*([a-zA-Z0-9_\-\.\/]+)', cmd_str)
+                    if m_redir:
+                        redir_file = m_redir.group(1).strip()
+                        files_changed.add(redir_file)
+                        self.execution_context.record_file_change(redir_file)
+                    elif any(k in task.lower() for k in ["create", "yarat", "yaz", "write", "make", "python", "script"]) and "echo " in cmd_str:
+                        m_echo = re.search(r'echo\s+[\'"]([\s\S]*?)[\'"]', cmd_str)
+                        if m_echo:
+                            echo_content = m_echo.group(1)
+                            target_file = "main.py"
+                            f_matches = re.findall(r"[\w/\-]+\.(?:py|js|ts|tsx|html|css|json|txt|md)\b", task, re.IGNORECASE)
+                            if f_matches:
+                                target_file = f_matches[0]
+                            self.tool_registry.execute("write_file", {"path": target_file, "content": echo_content})
+                            files_changed.add(target_file)
+                            self.execution_context.record_file_change(target_file)
 
                 # After a read_file, record the hash for conflict detection
                 if call.tool == "read_file" and "path" in call.args and obs.get("exit_code") == 0:
@@ -857,7 +909,7 @@ class AutonomousAgent:
         summary = (
             f"Reached maximum iterations ({self.max_iterations}). "
             f"Modified {len(files_changed)} file(s): {', '.join(sorted(files_changed)) or 'none'}.\n\n"
-            f"[VERIFICATION RESULT]: {ver_res.summary}"
+            f"[VERIFICATION RESULT]: {ver_res.status.value}"
         )
         self._set_state(final_state)
         self._emit("completed" if final_state in (AgentState.COMPLETED, AgentState.COMPLETED_WITH_WARNINGS) else "verification_failed", {
@@ -865,6 +917,16 @@ class AutonomousAgent:
             "files_changed": sorted(files_changed),
             "verification_status": ver_res.status.value,
         })
+        # Record task outcome in persistent memory graph
+        try:
+            is_success = final_state in (AgentState.COMPLETED, AgentState.COMPLETED_WITH_WARNINGS)
+            self.memory_graph.record_task_completed(
+                prompt=task,
+                files_changed=sorted(files_changed),
+                quality_score=90 if is_success else 40,
+            )
+        except Exception:
+            pass
         return AgentTaskResult(
             status=final_state, task=task,
             summary=summary,
@@ -972,24 +1034,27 @@ class AutonomousAgent:
         )
 
         if compact:
-            # Compact mode: just tool names + one-line descriptions (much fewer tokens)
+            # Compact mode: explicit file creation rule + tool names
             tool_lines = "\n".join(
                 f'  "{t["name"]}": {t.get("description", "")[:80]}'
                 for t in tool_defs
             )
             return f"""You are an autonomous AI coding agent inside Vibe Studio IDE. {protocol_note}
 
-TOOL CALL FORMAT (use EXACTLY this):
+CRITICAL RULES:
+1. TO CREATE A FILE: ALWAYS use `write_file` with "path" and "content". NEVER use execute_command or echo to create files!
+2. TO EDIT A FILE: ALWAYS use `patch_file` or `write_file`.
+3. TO RUN COMMANDS / TESTS: Use `execute_command` or `run_tests`.
+
+TOOL CALL FORMAT (use EXACTLY this JSON structure):
 ```json
-{{"tool": "tool_name", "args": {{"param": "value"}}}}
+{{"tool": "write_file", "args": {{"path": "main.py", "content": "def main():\\n    print('Hello World')\\n"}}}}
 ```
 
-For final answer with no more tool calls: respond in PLAIN TEXT ONLY (no JSON, no code blocks).
+For final answer when done: respond in PLAIN TEXT ONLY (no JSON).
 
 AVAILABLE TOOLS:
 {tool_lines}
-
-RULES: Read files before editing. Use smallest change possible. Verify after editing.
 """
 
         # Full prompt with complete schema
