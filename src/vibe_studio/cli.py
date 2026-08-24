@@ -36,10 +36,13 @@ def main(argv: list[str] | None = None) -> int:
         description="Vibe Studio 5.0 Omniverse — AI-native desktop, web, swarm & security coding agent",
     )
     parser.add_argument("--root", type=str, default=".", help="Workspace root directory")
+    parser.add_argument("--jarvis", action="store_true", help="Launch J.A.R.V.I.S Cyber Cockpit directly")
     subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand to execute")
 
-    # --- Subcommand: gui ---
+    # --- Subcommand: gui & jarvis ---
     subparsers.add_parser("gui", help="Launch the full Vibe Studio Desktop GUI with J.A.R.V.I.S")
+    subparsers.add_parser("jarvis", help="Launch standalone J.A.R.V.I.S AI Cockpit")
+
 
 
     # --- Subcommand: run ---
@@ -111,9 +114,15 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if not args.subcommand:
-        from vibe_studio.__main__ import main as gui_main
+    if args.jarvis or args.subcommand == "jarvis":
+        from vibe_studio.app.application import launch_jarvis_standalone
+        root = Path(getattr(args, "root", ".")).resolve()
+        return launch_jarvis_standalone(workspace_root=root)
+
+    if not args.subcommand or args.subcommand == "gui":
+        from vibe_studio.app.application import main as gui_main
         return gui_main()
+
 
     root = Path(getattr(args, "root", ".")).resolve()
 
