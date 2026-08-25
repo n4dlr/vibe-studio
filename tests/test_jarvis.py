@@ -421,6 +421,22 @@ def test_jarvis_install_package_intent(tmp_path: Path):
     assert "requests" in resp.spoken_text.lower()
 
 
+def test_jarvis_create_nodejs_and_correction_handling(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    # 1. Create Node.js file
+    resp = jarvis.execute_command("create simple nodejs file in desktop")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "write_file"
+    assert any("app.js" in str(f) for f in resp.files_modified)
+
+    # 2. Correction command: "this is not nodejs"
+    resp_corr = jarvis.execute_command("this is not nodejs")
+    assert isinstance(resp_corr, JarvisResponse)
+    assert resp_corr.action_taken == "correction_applied"
+    assert "corrected" in resp_corr.spoken_text.lower() or "düzəltdim" in resp_corr.spoken_text.lower()
+
+
+
 
 
 

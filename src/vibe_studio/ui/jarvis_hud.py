@@ -251,15 +251,16 @@ class JarvisHUDPanel(QWidget):
 
         # Quick Action Chips Toolbar
         chips_layout = QHBoxLayout()
-        chips_layout.setSpacing(4)
         chips = [
             ("⚡ Status", "system status"),
-            ("🌐 Brave", "open brave"),
-            ("🎮 TLauncher", "go desktop and open tlauncher"),
+            ("🌐 Browser", "open browser"),
+            ("💻 Terminal", "open terminal"),
             ("🧪 Run Tests", "run tests"),
+            ("🔒 Lock PC", "lock screen"),
             ("📸 Screenshot", "take screenshot"),
             ("🧹 Clean Cache", "clean cache"),
         ]
+
         for label, cmd in chips:
             btn = QPushButton(label)
             btn.setStyleSheet(f"""
@@ -332,7 +333,8 @@ class JarvisHUDPanel(QWidget):
         input_layout.addWidget(self.mic_btn)
 
         self.cmd_input = QLineEdit()
-        self.cmd_input.setPlaceholderText("Jarvis-ə istənilən tapşırığı verin... ('Mənə bir FastAPI serveri yaz', 'go desktop and open tlauncher', 'status')")
+        self.cmd_input.setPlaceholderText("Jarvis-ə istənilən tapşırığı verin... ('Mənə bir FastAPI serveri yaz', 'create simple nodejs file', 'status')")
+
         self.cmd_input.setStyleSheet(f"""
             QLineEdit {{
                 background: {_BG_DEEP};
