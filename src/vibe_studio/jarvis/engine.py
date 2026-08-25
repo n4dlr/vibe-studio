@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vibe_studio.jarvis.coding_bridge import JarvisCodingBridge
+from vibe_studio.jarvis.scheduler import JarvisScheduler, ScheduledItem
 from vibe_studio.jarvis.system_tools import JarvisSystemTools
 from vibe_studio.jarvis.telemetry import SystemSnapshot, SystemTelemetry
 from vibe_studio.jarvis.voice_engine import JarvisVoiceEngine
@@ -60,7 +61,9 @@ class JarvisCore:
         self.voice_engine = JarvisVoiceEngine()
         self.voice_listener = JarvisVoiceListener()
         self.watchdog = JarvisWatchdog(self.telemetry, on_alert=self._on_watchdog_alert)
+        self.scheduler = JarvisScheduler(on_trigger=self._on_scheduler_trigger)
         self.event_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
+
 
     def set_model(self, model_name: str) -> None:
         """Update active AI model."""
@@ -98,6 +101,14 @@ class JarvisCore:
     def _on_watchdog_alert(self, alert_type: str, message: str) -> None:
         self.speak(message)
         self._emit("watchdog_alert", {"type": alert_type, "message": message})
+
+    def _on_scheduler_trigger(self, item: ScheduledItem) -> None:
+        title = "Alarm" if item.is_alarm else "Timer"
+        spoken = f"Sir, your {item.label} reminder has expired."
+        self.speak(spoken)
+        self.system_tools.show_desktop_notification(f"J.A.R.V.I.S. {title}", f"{item.label} completed!")
+        self._emit("timer_triggered", item.to_dict())
+
 
     def _resolve_smart_file_boilerplate(self, raw_name: str, prompt: str, loc: str = "desktop") -> tuple[str, str]:
         """Resolve realistic filename and idiomatic starter boilerplate based on requested language."""
@@ -602,8 +613,149 @@ class JarvisCore:
                 self._emit("command_completed", {"response": spoken, "result": ins_res})
                 return res
 
+        # 1x. Timers, Alarms & Reminders: "10 dəqiqə sonra çayı xatırlat", "set timer for 5 minutes", "saat 15:30-da zəng qur"
+        if any(k in p for k in ["taymer", "timer", "xatırlat", "alarm", "zəng qur", "zeng vur", "reminder"]):
+            # Relative timer: "set timer for 10 minutes", "5 dəqiqə sonra xatırlat"
+            m_rel = (
+                re.search(r"(?:set\s+)?timer\s+(?:for\s+)?(\d+)\s*(minute|second|min|sec|hour|dəqiqə|deqiqe|saniyə|saat)?(?:\s+(?:for|to|haqqında)?\s*(.+))?", p)
+                or re.search(r"(\d+)\s*(minute|second|min|sec|hour|dəqiqə|deqiqe|saniyə|saat)\s*(?:sonra)?\s*(.+)?\s*xatırlat", p)
+            )
+            if m_rel:
+                amount = float(m_rel.group(1))
+                unit = (m_rel.group(2) or "min").lower()
+                lbl = (m_rel.group(3) or "Reminder").strip()
+                sec = amount * 60.0
+                if "sec" in unit or "saniyə" in unit:
+                    sec = amount
+                elif "hour" in unit or "saat" in unit:
+                    sec = amount * 3600.0
+
+                item = self.scheduler.set_timer(sec, lbl)
+                spoken = f"Timer set for {int(amount)} {unit} for '{lbl}', sir." if not is_az else f"{int(amount)} {unit} üçün '{lbl}' taymeri quruldu, cənab."
+                self.speak(spoken)
+                res = JarvisResponse(spoken_text=spoken, action_taken="set_timer", action_result=item.to_dict(), execution_time=time.monotonic() - t0, model_used=self.model)
+                self._emit("command_completed", {"response": spoken, "result": item.to_dict()})
+                return res
+
+            # Absolute alarm: "set alarm for 14:30", "saat 09:00-da zəng qur"
+            m_alarm = re.search(r"(?:alarm|zəng|saat)\s+(?:for\s+)?(\d{1,2}:\d{2})(?:\s+(?:for)?\s*(.+))?", p)
+            if m_alarm:
+                t_str = m_alarm.group(1)
+                lbl = (m_alarm.group(2) or "Alarm").strip()
+                item = self.scheduler.set_alarm(t_str, lbl)
+                if item:
+                    spoken = f"Alarm scheduled for {t_str} ('{lbl}'), sir." if not is_az else f"Saat {t_str} üçün '{lbl}' zəngi quruldu, cənab."
+                else:
+                    spoken = "Could not schedule alarm. Please use HH:MM format, sir."
+                self.speak(spoken)
+                res = JarvisResponse(spoken_text=spoken, action_taken="set_alarm", action_result=item.to_dict() if item else {}, execution_time=time.monotonic() - t0, model_used=self.model)
+                self._emit("command_completed", {"response": spoken})
+                return res
+
+            # List active timers
+            if any(k in p for k in ["list timer", "aktiv taymer", "taymerləri göstər", "active timers"]):
+                active = self.scheduler.list_active_timers()
+                spoken = f"You have {len(active)} active timers scheduled, sir." if not is_az else f"Hazırda {len(active)} aktiv taymeriniz var, cənab."
+                self.speak(spoken)
+                res = JarvisResponse(spoken_text=spoken, action_taken="list_timers", action_result={"count": len(active), "timers": [t.to_dict() for t in active]}, execution_time=time.monotonic() - t0, model_used=self.model)
+                self._emit("command_completed", {"response": spoken})
+                return res
+
+        # 1y. Direct YouTube Media Search: "youtube-da Hans Zimmer çal", "play interstellar on youtube"
+        m_yt = (
+            re.search(r"(?:play\s+)?(.+)\s+(?:on\s+youtube|in\s+youtube)", p)
+            or re.search(r"youtube(?:-da|-də)?\s+(.+)\s+(?:aç|çal|oxut|axtar)", p)
+            or re.search(r"youtube\s+(?:search\s+|axtar\s+)?(.+)", p)
+        )
+        if m_yt and ("youtube" in p):
+            yt_query = m_yt.group(1).strip()
+            yt_res = self.system_tools.play_youtube(yt_query)
+            spoken = f"Opening YouTube for '{yt_query}', sir." if not is_az else f"YouTube-da '{yt_query}' axtarılır və oxudulur, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="play_youtube", action_result=yt_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": yt_res})
+            return res
+
+        # 1z. Direct Spotify Media Search: "spotify-da eminem çal", "play eminem on spotify"
+        m_sp = (
+            re.search(r"(?:play\s+)?(.+)\s+(?:on\s+spotify|in\s+spotify)", p)
+            or re.search(r"spotify(?:-da|-də)?\s+(.+)\s+(?:aç|çal|oxut|axtar)", p)
+            or re.search(r"spotify\s+(?:search\s+|axtar\s+)?(.+)", p)
+        )
+        if m_sp and ("spotify" in p):
+            sp_query = m_sp.group(1).strip()
+            sp_res = self.system_tools.play_spotify(sp_query)
+            spoken = f"Searching Spotify for '{sp_query}', sir." if not is_az else f"Spotify-da '{sp_query}' oxudulur, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="play_spotify", action_result=sp_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": sp_res})
+            return res
+
+        # 1aa. Global Deep Disk File Search: "bütün kompüterdə report.pdf tap", "find all pdf files"
+        if any(k in p for k in ["find file", "find files", "kompüterdə tap", "bütün kompüterdə", "şəkilləri tap", "sənədləri tap"]):
+            m_find = re.search(r"(?:find|search\s+for|bütün\s+kompüterdə|tap)\s+(?:all\s+)?([a-zA-Z0-9_\-\.\*]+)", p)
+            query_pat = m_find.group(1).strip() if m_find else "pdf"
+            f_res = self.system_tools.find_files_global(query_pat)
+            cnt = f_res.get("count", 0)
+            spoken = f"Found {cnt} matching files for '{query_pat}' across your disk, sir." if not is_az else f"Kompüterdə '{query_pat}' üzrə {cnt} uyğun fayl tapıldı, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="find_files_global", action_result=f_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": f_res})
+            return res
+
+        # 1ab. Native Desktop Notifications: "send notification Hello", "bildiriş göndər Test"
+        m_notif = re.search(r"(?:send\s+notification|bildiriş\s+göndər|bildiriş\s+yarat)\s+(.+)", p)
+        if m_notif:
+            n_text = m_notif.group(1).strip()
+            n_res = self.system_tools.show_desktop_notification("J.A.R.V.I.S.", n_text)
+            spoken = f"Notification posted to desktop, sir." if not is_az else f"Masaüstü bildirişi göndərildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="desktop_notification", action_result=n_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": n_res})
+            return res
+
+        # 1ac. Vision Screenshot & Webcam Analysis: "ekranı analiz et", "what is on my screen", "take photo with webcam"
+        if any(k in p for k in ["ekranı analiz et", "what is on my screen", "what's on my screen", "analyze screen", "ekranda nə var", "ekranda nə xətası var"]):
+            v_res = self.system_tools.analyze_screenshot_vision(query=user_prompt)
+            spoken = f"Visual analysis complete: {v_res.get('analysis', 'Screen is nominal')}, sir." if not is_az else f"Ekran vizual analizi tamamlandı: {v_res.get('analysis')}, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="vision_analysis", action_result=v_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": v_res})
+            return res
+        elif any(k in p for k in ["webcam", "veb kamera", "veb-kamera", "take photo"]):
+            cam_res = self.system_tools.capture_webcam()
+            spoken = f"Captured photo from webcam, sir." if not is_az else f"Veb-kamera ilə şəkil çəkildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="capture_webcam", action_result=cam_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": cam_res})
+            return res
+
+        # 1ad. Window & Keyboard Simulation: "tam ekran et", "pəncərəni kiçilt", "pəncərəni bağla"
+        if any(k in p for k in ["tam ekran", "maximize window", "pəncərəni böyüt"]):
+            w_res = self.system_tools.window_control("maximize")
+            spoken = "Window maximized, sir." if not is_az else "Pəncərə tam ekran edildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="window_control", action_result=w_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["pəncərəni kiçilt", "minimize window"]):
+            w_res = self.system_tools.window_control("minimize")
+            spoken = "Window minimized, sir." if not is_az else "Pəncərə kiçildildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="window_control", action_result=w_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["pəncərəni bağla", "close window", "active window close"]):
+            w_res = self.system_tools.window_control("close")
+            spoken = "Window closed, sir." if not is_az else "Pəncərə bağlandı, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="window_control", action_result=w_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
         # 2. Specific Speedtest / Fast.com intent
         if "fast.com" in p or "speedtest" in p or "speed test" in p:
+
 
 
 
