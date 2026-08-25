@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 
 from PySide6.QtWidgets import (
@@ -115,26 +115,40 @@ class ArcReactorWidget(QWidget):
 class VoiceBridge(QObject):
     """Thread-safe Qt signal bridge for audio transcription and wake-word events."""
     transcription_ready = Signal(str)
+    state_changed = Signal(str)
 
 
 class JarvisHUDPanel(QWidget):
     """Full Agentic J.A.R.V.I.S holographic cockpit and voice intelligence panel."""
 
+    _PERSONA_KEYS = ["banu", "babek", "ryan", "friday", "modern", "emel", "ahmet"]
+
     def __init__(self, workspace_root: str | Path = ".", parent=None):
         super().__init__(parent)
         self.workspace_root = Path(workspace_root).resolve()
+        self._settings = QSettings("VibeStudio", "JARVIS")
         self.jarvis = JarvisCore(self.workspace_root)
         self.jarvis.add_event_callback(self._on_jarvis_event)
         self.jarvis.start_sentinel()
         self._is_voice_recording = False
 
+        # Restore persisted model
+        saved_model = self._settings.value("jarvis/model", "")
+        if saved_model:
+            self.jarvis.set_model(saved_model)
+
+        # Restore persisted voice persona
+        saved_voice_idx = self._settings.value("jarvis/voice_index", 0, type=int)
+        if 0 <= saved_voice_idx < len(self._PERSONA_KEYS):
+            self.jarvis.voice_engine.set_persona(self._PERSONA_KEYS[saved_voice_idx])
+
         # Thread-safe Voice Bridge for GUI STT
         self._voice_bridge = VoiceBridge()
         self._voice_bridge.transcription_ready.connect(self._on_transcribed)
+        self._voice_bridge.state_changed.connect(self._on_duplex_state_changed)
         self.jarvis.voice_listener.on_wake_word = lambda w: self._voice_bridge.transcription_ready.emit(w)
 
         self._setup_ui()
-
 
         # Telemetry refresh timer (every 2 seconds)
         self._telemetry_timer = QTimer(self)
@@ -178,8 +192,11 @@ class JarvisHUDPanel(QWidget):
         self.model_combo.setMaximumWidth(135)
         available_models = self.jarvis.list_available_models()
         self.model_combo.addItems(available_models)
+        # Sync combo with engine's current model (may have been restored from settings)
         if self.jarvis.model in available_models:
             self.model_combo.setCurrentText(self.jarvis.model)
+        elif available_models:
+            self.jarvis.set_model(available_models[0])
         self.model_combo.setStyleSheet(f"""
             QComboBox {{
                 background: {_BG_DEEP};
@@ -206,6 +223,10 @@ class JarvisHUDPanel(QWidget):
             "🇹🇷 Emel (Kadın)",
             "🇹🇷 Ahmet (Erkek)",
         ])
+        # Sync combo with persisted voice index
+        saved_voice_idx = self._settings.value("jarvis/voice_index", 0, type=int)
+        if 0 <= saved_voice_idx < self.voice_combo.count():
+            self.voice_combo.setCurrentIndex(saved_voice_idx)
         self.voice_combo.setStyleSheet(f"""
             QComboBox {{
                 background: {_BG_DEEP};
@@ -218,6 +239,23 @@ class JarvisHUDPanel(QWidget):
         """)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
         title_row.addWidget(self.voice_combo)
+
+        # Live Duplex Voice Mode (Hands-Free continuous chat)
+        self.duplex_btn = QPushButton("🟢 Canlı: OFF")
+        self.duplex_btn.setMaximumWidth(95)
+        self.duplex_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {_BG_DEEP};
+                color: {_TEXT_MUTED};
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+        """)
+        self.duplex_btn.clicked.connect(self._toggle_live_duplex)
+        title_row.addWidget(self.duplex_btn)
 
         # Wake-Word Live Listener Toggle
         self.wake_btn = QPushButton("🎙️ Wake: OFF")
@@ -272,6 +310,8 @@ class JarvisHUDPanel(QWidget):
         self.model_pill.setStyleSheet(f"background: {_BG_DEEP}; color: {_CYAN}; border: 1px solid {_BORDER}; border-radius: 4px; padding: 2px 6px; font-size: 11px;")
         self.net_pill = QLabel("Net: Online")
         self.net_pill.setStyleSheet(f"background: {_BG_DEEP}; color: {_GREEN}; border: 1px solid {_BORDER}; border-radius: 4px; padding: 2px 6px; font-size: 11px;")
+        self.mem_pill = QLabel("🧠 Yaddaş: 0")
+        self.mem_pill.setStyleSheet(f"background: {_BG_DEEP}; color: #a855f7; border: 1px solid {_BORDER}; border-radius: 4px; padding: 2px 6px; font-size: 11px;")
         self.uptime_pill = QLabel("Uptime: 0h")
         self.uptime_pill.setStyleSheet(f"background: {_BG_DEEP}; color: {_TEXT}; border: 1px solid {_BORDER}; border-radius: 4px; padding: 2px 6px; font-size: 11px;")
 
@@ -279,6 +319,7 @@ class JarvisHUDPanel(QWidget):
         pill_layout.addWidget(self.ram_pill)
         pill_layout.addWidget(self.model_pill)
         pill_layout.addWidget(self.net_pill)
+        pill_layout.addWidget(self.mem_pill)
         pill_layout.addWidget(self.uptime_pill)
         pill_layout.addStretch()
         info_layout.addLayout(pill_layout)
@@ -290,6 +331,7 @@ class JarvisHUDPanel(QWidget):
         chips_layout = QHBoxLayout()
         chips = [
             ("⚡ Status", "system status"),
+            ("👁️ Ekranı Gör", "ekranımda nə görürsən"),
             ("🌐 Browser", "open browser"),
             ("💻 Terminal", "open terminal"),
             ("🧪 Run Tests", "run tests"),
@@ -414,23 +456,66 @@ class JarvisHUDPanel(QWidget):
         self.cpu_pill.setText(f"CPU: {snap.cpu_percent:.0f}%")
         self.ram_pill.setText(f"RAM: {snap.ram_used_gb:.1f} / {snap.ram_total_gb:.0f} GB")
         self.uptime_pill.setText(f"Uptime: {snap.uptime_hours:.1f}h")
+        try:
+            m_stats = self.jarvis.memory_db.get_stats()
+            self.mem_pill.setText(f"🧠 Yaddaş: {m_stats['conversations'] + m_stats['facts']}")
+        except Exception:
+            pass
 
     def _on_model_changed(self, model_name: str) -> None:
         if model_name:
             self.jarvis.set_model(model_name)
             self.model_pill.setText(f"Brain: {model_name}")
+            self._settings.setValue("jarvis/model", model_name)
             self.output_box.append(f"<span style='color:{_GOLD}; font-style:italic;'>[System] J.A.R.V.I.S brain switched to {model_name}</span>\n")
             self.jarvis.speak(f"Neural model updated to {model_name}, sir.")
 
     def _on_voice_changed(self, index: int) -> None:
-        persona_keys = ["banu", "babek", "ryan", "friday", "modern", "emel", "ahmet"]
-        if 0 <= index < len(persona_keys):
-            p = persona_keys[index]
+        if 0 <= index < len(self._PERSONA_KEYS):
+            p = self._PERSONA_KEYS[index]
             self.jarvis.voice_engine.set_persona(p)
-            v_info = self.jarvis.voice_engine.get_current_voice_info()
+            self._settings.setValue("jarvis/voice_index", index)
             g_name = "Qadın (Banu)" if p == "banu" else ("Kişi (Babək)" if p == "babek" else p.capitalize())
             self.output_box.append(f"<span style='color:{_GOLD}; font-style:italic;'>[Voice] Səs '{g_name}' olaraq dəyişdirildi.</span>\n")
             self.jarvis.speak("Səs tənzimləməsi yeniləndi, cənab.")
+
+    def _toggle_live_duplex(self) -> None:
+        if self.jarvis.voice_listener.is_duplex_active:
+            self.jarvis.voice_listener.stop_live_duplex()
+            self.duplex_btn.setText("🟢 Canlı: OFF")
+            self.duplex_btn.setStyleSheet(f"background: {_BG_DEEP}; color: {_TEXT_MUTED}; border: 1px solid {_BORDER}; border-radius: 4px; padding: 2px 6px; font-size: 10px; font-weight: bold;")
+            self.mic_btn.setText("🎙️ Səsli")
+            self.mic_btn.setStyleSheet(f"background: {_CYAN}; color: #000; border: none; border-radius: 6px; font-size: 11px; font-weight: bold;")
+            self.output_box.append("<span style='color:#94a3b8; font-style:italic;'>[Live Voice] Canlı danışıq rejimi dayandırıldı.</span>\n")
+        else:
+            started = self.jarvis.voice_listener.start_live_duplex(
+                on_transcribed=lambda text: self._voice_bridge.transcription_ready.emit(text),
+                on_state_changed=lambda st: self._voice_bridge.state_changed.emit(st),
+            )
+            if started:
+                self.duplex_btn.setText("🟢 Canlı: ON")
+                self.duplex_btn.setStyleSheet(f"background: {_BG_DEEP}; color: #22c55e; border: 1px solid #22c55e; border-radius: 4px; padding: 2px 6px; font-size: 10px; font-weight: bold;")
+                self.output_box.append("<span style='color:#22c55e; font-style:italic;'>🎙️ [Live Voice] Real-time fasiləsiz canlı danışıq aktivdir! İstədiyiniz zaman danışın.</span>\n")
+                self.jarvis.speak("Canlı söhbət rejimi aktivdir, cənab. Sizi dinləyirəm.")
+            else:
+                self.output_box.append("<span style='color:#ef4444; font-style:italic;'>⚠️ Canlı səs rejimi başladıla bilmədi.</span>\n")
+
+    def _on_duplex_state_changed(self, state: str) -> None:
+        if state == "USER_SPEAKING":
+            self.mic_btn.setText("🔴 Danışırsınız...")
+            self.mic_btn.setStyleSheet("background: #ef4444; color: #fff; border-radius: 6px; font-size: 10px; font-weight: bold;")
+        elif state == "TRANSCRIBING":
+            self.mic_btn.setText("⏳ Tanıyır...")
+            self.mic_btn.setStyleSheet(f"background: {_GOLD}; color: #000; border-radius: 6px; font-size: 10px; font-weight: bold;")
+        elif state == "JARVIS_SPEAKING":
+            self.mic_btn.setText("🔊 Danışır...")
+            self.mic_btn.setStyleSheet(f"background: {_CYAN}; color: #000; border-radius: 6px; font-size: 10px; font-weight: bold;")
+        elif state == "LISTENING":
+            self.mic_btn.setText("🟢 Dinləyir...")
+            self.mic_btn.setStyleSheet("background: #10b981; color: #000; border-radius: 6px; font-size: 10px; font-weight: bold;")
+        elif state == "IDLE":
+            self.mic_btn.setText("🎙️ Səsli")
+            self.mic_btn.setStyleSheet(f"background: {_CYAN}; color: #000; border-radius: 6px; font-size: 11px; font-weight: bold;")
 
     def _toggle_wake_word(self) -> None:
         if self.jarvis.voice_listener.is_wake_word_active:
@@ -489,19 +574,25 @@ class JarvisHUDPanel(QWidget):
                     }}
                 """)
                 self.output_box.append("<span style='color:#ef4444; font-style:italic;'>🎙️ [Mikrofon Aktivdir] Danışın, bitəndə yenidən düyməyə basın...</span>\n")
+            else:
+                self.output_box.append("<span style='color:#ef4444; font-style:italic;'>⚠️ Mikrofon başladıla bilmədi. Səs cihazınızı yoxlayın.</span>\n")
         else:
             self._is_voice_recording = False
             self.mic_btn.setText("⏳ Tanıyır...")
             self.mic_btn.setStyleSheet(f"background: {_GOLD}; color: #000; border-radius: 6px; font-size: 10px; font-weight: bold;")
 
             def _transcribe_bg():
-                text = self.jarvis.voice_listener.stop_recording_and_transcribe()
-                # Run back on Qt event loop via QTimer.singleShot
-                QTimer.singleShot(0, lambda: self._on_transcribed(text))
+                try:
+                    text = self.jarvis.voice_listener.stop_recording_and_transcribe()
+                except Exception as e:
+                    text = ""
+                # Safely emit to main Qt GUI thread
+                self._voice_bridge.transcription_ready.emit(text)
 
             threading.Thread(target=_transcribe_bg, daemon=True).start()
 
     def _on_transcribed(self, recognized_text: str) -> None:
+        self._is_voice_recording = False
         self.mic_btn.setText("🎙️ Səsli")
         self.mic_btn.setStyleSheet(f"""
             QPushButton {{
@@ -512,12 +603,17 @@ class JarvisHUDPanel(QWidget):
                 font-size: 11px;
                 font-weight: bold;
             }}
+            QPushButton:hover {{
+                background: #67e8f9;
+            }}
         """)
-        if recognized_text:
-            self.output_box.append(f"<span style='color:#38bdf8; font-style:italic;'>🗣️ [Tanındı]: {recognized_text}</span>\n")
-            self._send_command(recognized_text)
+        rec_clean = (recognized_text or "").strip()
+        if rec_clean:
+            self.output_box.append(f"<span style='color:#38bdf8; font-style:italic;'>🗣️ [Tanındı]: {rec_clean}</span>\n")
+            self._send_command(rec_clean)
         else:
-            self.output_box.append("<span style='color:#94a3b8; font-style:italic;'>[Audio] Səs aşkar edilmədi.</span>\n")
+            self.output_box.append("<span style='color:#94a3b8; font-style:italic;'>[Audio] Səs aşkar edilmədi və ya çox qısadır.</span>\n")
+
 
     def _on_jarvis_event(self, event_type: str, data: dict) -> None:
         if event_type == "watchdog_alert":

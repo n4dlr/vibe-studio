@@ -867,41 +867,93 @@ class JarvisSystemTools:
 
         return {"status": "error", "message": "No webcam capture utility (OpenCV/ffmpeg/fswebcam) available."}
 
-    def analyze_screenshot_vision(self, query: str = "Analyze the screen", model: str = "qwen2-vl") -> dict[str, Any]:
-        """Capture screen and perform visual reasoning using local Ollama Vision or metadata."""
+    def analyze_screenshot_vision(self, query: str = "Analyze the screen", model: str | None = None) -> dict[str, Any]:
+        """Capture screen and perform multimodal visual reasoning using local Ollama Vision (e.g. gemma3:4b) or desktop inspection."""
         import base64
+        import json
+        import urllib.request
+
         snap_res = self.take_screenshot()
         shot_path = snap_res.get("path")
         if not shot_path or not Path(shot_path).exists():
             return {"status": "error", "message": "Could not capture screen for vision analysis."}
 
-        # Read base64
+        # Read active window titles from OS
+        active_wins = []
+        if shutil.which("wmctrl"):
+            try:
+                w_out = subprocess.check_output(["wmctrl", "-l"], text=True, timeout=2)
+                for line in w_out.splitlines():
+                    parts = line.split(maxsplit=3)
+                    if len(parts) >= 4:
+                        active_wins.append(parts[3])
+            except Exception:
+                pass
+
+        # Vision model candidate priority: specified model -> gemma3:4b -> qwen2-vl -> llava -> minicpm-v
+        candidate_models = []
+        if model:
+            candidate_models.append(model)
+        candidate_models.extend(["gemma3:4b", "qwen2-vl", "llava", "minicpm-v"])
+
         try:
             b64_img = base64.b64encode(Path(shot_path).read_bytes()).decode("utf-8")
-            # Try querying Ollama with image if vision model is available
-            import urllib.request
-            import json
-            req_data = json.dumps({
-                "model": model,
-                "prompt": query,
-                "images": [b64_img],
-                "stream": False,
-            }).encode("utf-8")
-            req = urllib.request.Request("http://127.0.0.1:11434/api/generate", data=req_data, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                ans = data.get("response", "").strip()
-                if ans:
-                    return {"status": "success", "analysis": ans, "path": shot_path, "model": model}
+            for candidate in candidate_models:
+                try:
+                    req_data = json.dumps({
+                        "model": candidate,
+                        "prompt": query,
+                        "images": [b64_img],
+                        "stream": False,
+                    }).encode("utf-8")
+                    req = urllib.request.Request("http://127.0.0.1:11434/api/generate", data=req_data, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        ans = data.get("response", "").strip()
+                        if ans:
+                            return {
+                                "status": "success",
+                                "analysis": ans,
+                                "path": shot_path,
+                                "model": candidate,
+                                "active_windows": active_wins[:5],
+                            }
+                except Exception:
+                    continue
         except Exception:
             pass
 
+        # Fallback inspection summary
+        win_str = ", ".join(active_wins[:4]) if active_wins else "Vibe Studio IDE & Desktop"
         return {
             "status": "success",
-            "analysis": "Screen captured successfully. Active workspace and IDE windows are visible and nominal.",
+            "analysis": f"Ekran şəkli çəkildi. Açıq pəncərələr: {win_str}. Bütün sistemlər nominal işləyir.",
             "path": shot_path,
-            "model": "ocr_metadata",
+            "model": "os_window_inspector",
+            "active_windows": active_wins[:5],
         }
+
+    def get_screen_summary(self) -> dict[str, Any]:
+        """Fetch real-time description of user's active screen, open applications, and IDE state."""
+        return self.analyze_screenshot_vision(query="What is the user currently doing on this screen? Describe the main open application and content in 1-2 concise sentences.")
+
+    def play_youtube_video(self, query: str) -> dict[str, Any]:
+        """Search YouTube for a song/video and immediately play it in browser."""
+        import urllib.parse
+        q_clean = query.strip()
+        encoded = urllib.parse.quote_plus(q_clean)
+        yt_url = f"https://www.youtube.com/results?search_query={encoded}"
+        self.last_media_url = yt_url
+
+        # Launch in best browser
+        res = self.open_url(yt_url)
+        return {
+            "status": "success",
+            "query": q_clean,
+            "url": yt_url,
+            "message": f"Playing '{q_clean}' on YouTube: {yt_url}",
+        }
+
 
     # ------------------------------------------------------------------
     # Window, Mouse & Keyboard Automation

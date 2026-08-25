@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vibe_studio.jarvis.coding_bridge import JarvisCodingBridge
+from vibe_studio.jarvis.memory_db import JarvisMemoryDB
 from vibe_studio.jarvis.scheduler import JarvisScheduler, ScheduledItem
 from vibe_studio.jarvis.system_tools import JarvisSystemTools
 from vibe_studio.jarvis.telemetry import SystemSnapshot, SystemTelemetry
@@ -26,6 +27,7 @@ from vibe_studio.jarvis.voice_engine import JarvisVoiceEngine
 from vibe_studio.jarvis.voice_listener import JarvisVoiceListener
 from vibe_studio.jarvis.watchdog import JarvisWatchdog
 from vibe_studio.providers.ollama_provider import OllamaProvider
+
 
 
 @dataclass
@@ -65,14 +67,21 @@ class JarvisCore:
         self.telemetry = SystemTelemetry()
         self.system_tools = JarvisSystemTools(self.workspace_root)
         self.coding_bridge = JarvisCodingBridge(self.workspace_root)
+        self.memory_db = JarvisMemoryDB()
         self.voice_engine = JarvisVoiceEngine()
         self.voice_listener = JarvisVoiceListener(
             on_text_recognized=self._on_voice_transcribed,
             on_wake_word=self._on_wake_word_triggered,
         )
+        # Hook half-duplex TTS speaking feedback avoidance
+        self.voice_engine.add_state_callback(self._on_tts_speaking_changed)
+
         self.watchdog = JarvisWatchdog(self.telemetry, on_alert=self._on_watchdog_alert)
         self.scheduler = JarvisScheduler(on_trigger=self._on_scheduler_trigger)
         self.event_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
+
+    def _on_tts_speaking_changed(self, is_speaking: bool) -> None:
+        self.voice_listener.set_tts_speaking(is_speaking)
 
     def _on_voice_transcribed(self, text: str) -> None:
         self._emit("voice_transcribed", {"text": text})
@@ -111,6 +120,13 @@ class JarvisCore:
         self.event_callbacks.append(cb)
 
     def _emit(self, event: str, data: dict[str, Any]) -> None:
+        if event == "command_completed":
+            resp_txt = data.get("response", "")
+            if resp_txt:
+                try:
+                    self.memory_db.save_turn("assistant", resp_txt, model=self.model)
+                except Exception:
+                    pass
         for cb in self.event_callbacks:
             try:
                 cb(event, data)
@@ -255,14 +271,21 @@ class JarvisCore:
         self.voice_engine.speak(text)
 
     def execute_command(self, user_prompt: str) -> JarvisResponse:
-
         """Process natural language command and execute full agentic actions."""
         t0 = time.monotonic()
         p = user_prompt.strip().lower()
         self._emit("command_received", {"prompt": user_prompt, "model": self.model})
 
+        # Save user prompt turn to persistent conversation memory
+        try:
+            self.memory_db.save_turn("user", user_prompt, model=self.model)
+        except Exception:
+            pass
+
         # Check if Azerbaijani language prompt (letters or keywords)
-        is_az = any(c in p for c in "əışçğöü") or any(w in p for w in ["salam", "necesen", "yarat", "temizle", "bagla", "nedir", "necedir", "veziyyet", "ise sal", "sabahin", "axsamin", "cenab", "kilidle", "kilitle", "cihaz", "whatsapdan", "zeng"])
+        is_az = any(c in p for c in "əışçğöü") or any(w in p for w in ["salam", "necesen", "yarat", "temizle", "bagla", "nedir", "necedir", "veziyyet", "ise sal", "sabahin", "axsamin", "cenab", "kilidle", "kilitle", "cihaz", "whatsapdan", "zeng", "internetden", "mene", "qiymet", "tapib", "haqqinda", "musigi", "mahnisi"])
+
+
 
 
 
@@ -315,12 +338,12 @@ class JarvisCore:
 
         # 1e. Web search & live price / info lookup:
         m_search = re.search(
-            r"(?:search\s+(?:for|the\s+web\s+for|in\s+internet\s+for|in\s+internet)?|google\s+(?:for)?|internetdən\s+(?:mənə\s+)?|internetdə\s+(?:axtar\s+)?|say\s+(?:to\s+(?:men|me)\s+)?latest\s+|tell\s+me\s+about\s+|find\s+(?:out\s+)?(?:the\s+)?prices?\s+of\s+)(.+)",
+            r"(?:(?:internet(?:den|dən)\s+(?:mene|mənə\s+)?(?:en\s+son\s+)?|internet(?:de|də)\s+(?:axtar\s+)?|search\s+(?:for|the\s+web\s+for|in\s+internet\s+for|in\s+internet)?|google\s+(?:for)?|say\s+(?:to\s+(?:men|me)\s+)?latest\s+|tell\s+me\s+about\s+|find\s+(?:out\s+)?(?:the\s+)?prices?\s+of\s+)(.+)|(.+?)\s+(?:qiymet(?:lerini|i|ler)?\s+(?:tap(?:ib\s+de)?|de|necedir|axtar)|qiymetleri|qiymeti))",
             p
         )
         if m_search:
-            query = m_search.group(1).strip().rstrip(".,!?")
-            query = re.sub(r"\b(?:tapıb\s+de|tap|de|axtar)\b", "", query, flags=re.IGNORECASE).strip()
+            query = (m_search.group(1) or m_search.group(2) or "").strip().rstrip(".,!?")
+            query = re.sub(r"\b(?:tapıb\s+de|tapib\s+de|tap|de|axtar)\b", "", query, flags=re.IGNORECASE).strip()
             if not query or len(query) < 2:
                 query = p
             result = self.system_tools.search_web(query)
@@ -336,6 +359,7 @@ class JarvisCore:
             res = JarvisResponse(spoken_text=spoken, action_taken="search_web", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": result})
             return res
+
 
         # 1f. Screen Lock / Cihazı Kilidlə
         if any(k in p for k in ["lock screen", "lock the screen", "lock computer", "lock pc", "lock device", "lock session", "cihazı kilitle", "cihazı kilidlə", "ekranı kilitle", "ekranı kilidlə", "kilitle", "kilidlə", "kompüteri kilidlə"]):
@@ -715,10 +739,12 @@ class JarvisCore:
             re.search(r"(.+?)\s+(?:musiqisini|mahnısını|mahnisi|musiqisi)\s+(?:aç|çal|oxut|başlat|ac)", p)
             or re.search(r"(?:aç|çal|oxut|başlat|ac)\s+(.+?)\s+(?:musiqisini|mahnısını|mahnisi|musiqisi)", p)
             or re.search(r"(?:musiqi|mahnı|mahni|song|music)\s+(?:aç|çal|oxut|başlat|play|ac)\s*(.+)?", p)
+            or re.search(r"^youtube(?:-da|-də|da|de)?\s+(.+)$", p)
             or re.search(r"youtube(?:-da|-də)?\s+(.+?)\s+(?:aç|çal|oxut|axtar|başlat|ac)", p)
             or re.search(r"spotify(?:-da|-də)?\s+(.+?)\s+(?:aç|çal|oxut|axtar|başlat|ac)", p)
             or re.search(r"(?:play|çal|oxut)\s+(.+?)\s+(?:on\s+youtube|in\s+youtube|on\s+ytb|in\s+ytb|on\s+spotify)", p)
             or re.search(r"(?:open\s+(?:the\s+)?)(.+?)\s+(?:music|song)?\s*(?:in\s+ytb|on\s+ytb|in\s+youtube|on\s+youtube)", p)
+            or re.search(r"^(?:open\s+(?:the\s+)?)(.+?)\s+youtube$", p)
             or re.search(r"(?:play|çal|oxut)\s+(.+)", p)
         )
         if m_music_all and any(k in p for k in ["youtube", "ytb", "spotify", "musiqi", "mahnı", "mahni", "song", "music", "play", "çal", "oxut"]):
@@ -756,10 +782,14 @@ class JarvisCore:
             self._emit("command_completed", {"response": spoken, "result": n_res})
             return res
 
-        # 1ac. Vision Screenshot & Webcam Analysis: "ekranı analiz et", "what is on my screen", "take photo with webcam"
-        if any(k in p for k in ["ekranı analiz et", "what is on my screen", "what's on my screen", "analyze screen", "ekranda nə var", "ekranda nə xətası var"]):
+        # 1ac. Vision Screenshot & Webcam Analysis: "ekranı analiz et", "what is on my screen", "ekranıma bax", "ekranımı gör"
+        if any(k in p for k in [
+            "ekranı analiz et", "what is on my screen", "what's on my screen", "analyze screen",
+            "ekranda nə var", "ekranda nə xətası var", "ekranıma bax", "ekrana bax", "ekranımı gör",
+            "ekranı gör", "ekranı təsvir et", "look at my screen", "see my screen", "describe my screen"
+        ]):
             v_res = self.system_tools.analyze_screenshot_vision(query=user_prompt)
-            spoken = f"Visual analysis complete: {v_res.get('analysis', 'Screen is nominal')}, sir." if not is_az else f"Ekran vizual analizi tamamlandı: {v_res.get('analysis')}, cənab."
+            spoken = f"Visual analysis complete: {v_res.get('analysis', 'Screen is nominal')}, sir." if not is_az else f"Ekran analizi: {v_res.get('analysis')}, cənab."
             self.speak(spoken)
             res = JarvisResponse(spoken_text=spoken, action_taken="vision_analysis", action_result=v_res, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": v_res})
@@ -1188,6 +1218,11 @@ class JarvisCore:
     def _reason_with_agentic_llm(self, user_prompt: str, is_az: bool = False) -> tuple[str, str | None, dict[str, Any] | None, list[str]]:
         """Run full autonomous agentic reasoning with file tools, execution, and bilingual replies."""
         snap = self.telemetry.get_snapshot()
+
+        # Retrieve RAG memory context and recent conversation history
+        rag_context = self.memory_db.build_rag_context(user_prompt)
+        history_context = self.memory_db.format_history_for_prompt(n=6)
+
         system_prompt = (
             f"You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), Tony Stark's autonomous AI assistant "
             f"and expert software engineer deeply integrated into the OS and Vibe Studio IDE.\n"
@@ -1201,6 +1236,8 @@ class JarvisCore:
             f"- User Desktop Path: {self.coding_bridge.desktop_dir}\n"
             f"- Workspace Root: {self.workspace_root}\n"
             f"- Active AI Model: {self.model}\n\n"
+            f"{rag_context}\n\n"
+            f"{history_context}\n\n"
             f"When asked about RAM, CPU, GPU, OS, disk, or hardware, use these real metrics directly.\n"
             "You are respectful, highly competent, concise, and address the user as 'sir' (or 'cənab' in Azerbaijani).\n"
             "If the user asks in Azerbaijani, respond fluently and naturally in Azerbaijani.\n"
@@ -1219,7 +1256,6 @@ class JarvisCore:
             "[TOOL: play_spotify(\"query\")]\n"
             "[TOOL: set_timer(seconds, \"label\")]\n"
             "[TOOL: set_alarm(\"HH:MM\", \"label\")]\n"
-
             "[TOOL: list_timers()]\n"
             "[TOOL: cancel_timer(\"id_or_label\")]\n"
             "[TOOL: find_files(\"pattern\")]\n"
@@ -1231,12 +1267,15 @@ class JarvisCore:
             "[TOOL: manage_bluetooth(\"on\" | \"off\" | \"scan\")]\n"
             "[TOOL: take_screenshot()]\n"
             "[TOOL: analyze_vision(\"query\")]\n"
+            "[TOOL: get_screen_summary()]\n"
             "[TOOL: capture_webcam()]\n"
             "[TOOL: window_control(\"maximize\" | \"minimize\" | \"close\")]\n"
             "[TOOL: click_mouse(x, y)]\n"
             "[TOOL: press_keys(\"keys\")]\n"
             "[TOOL: type_text(\"text\")]\n"
             "[TOOL: lock_screen()]\n"
+            "[TOOL: remember_fact(\"fact_key\", \"fact_value\")]\n"
+            "[TOOL: search_memory(\"query\")]\n"
             "[TOOL: whatsapp_call(\"contact_name\")]\n"
             "[TOOL: whatsapp_message(\"contact_name\", \"message_text\")]\n"
             "[TOOL: save_contact(\"contact_name\", \"phone_number\")]\n"
@@ -1309,11 +1348,22 @@ class JarvisCore:
                                 app_name = tool_arg.strip().strip('"\'')
                                 executed_actions[f"open_{app_name}"] = self.system_tools.open_app(app_name)
                             elif tool_name == "search_web":
-                                query = tool_arg.strip().strip('"\'')
-                                executed_actions[f"search_{query}"] = self.system_tools.search_web(query)
+                                q_web = tool_arg.strip().strip('"\'')
+                                executed_actions["search_web"] = self.system_tools.search_web(q_web)
                             elif tool_name in ("play_music", "play_youtube", "play_spotify"):
-                                query = tool_arg.strip().strip('"\'')
-                                executed_actions["play_music"] = self.system_tools.play_music(query)
+                                s_name = tool_arg.strip().strip('"\'')
+                                executed_actions["play_music"] = self.system_tools.play_youtube(s_name, direct_play=True)
+                                executed_actions["music"] = executed_actions["play_music"]
+                            elif tool_name == "remember_fact":
+                                m_rf = re.match(r"""["']([^"']+)["']\s*,\s*["']?(.*)["']?""", tool_arg, re.DOTALL)
+                                if m_rf:
+                                    self.memory_db.remember_fact(m_rf.group(1), m_rf.group(2))
+                                    executed_actions["remember"] = {"key": m_rf.group(1), "value": m_rf.group(2)}
+                            elif tool_name == "search_memory":
+                                m_q = tool_arg.strip().strip('"\'')
+                                executed_actions["memory"] = [c.__dict__ for c in self.memory_db.search_rag(m_q)]
+                            elif tool_name == "get_screen_summary":
+                                executed_actions["screen_summary"] = self.system_tools.get_screen_summary()
                             elif tool_name == "set_timer":
                                 m_tm = re.match(r"""(\d+(?:\.\d+)?)\s*(?:,\s*["']?(.*?)["']?)?$""", tool_arg.strip())
                                 if m_tm:
@@ -1331,8 +1381,8 @@ class JarvisCore:
                                 t_target = tool_arg.strip().strip('"\'')
                                 executed_actions["cancel_timer"] = self.scheduler.cancel_timer(t_target)
                             elif tool_name == "find_files":
-                                f_pat = tool_arg.strip().strip('"\'')
-                                executed_actions["find_files"] = self.system_tools.find_files_global(f_pat)
+                                pat = tool_arg.strip().strip('"\'')
+                                executed_actions["find_files"] = self.system_tools.find_files_global(pat)
                             elif tool_name == "show_notification":
                                 m_notif_args = re.match(r"""["']([^"']+)["']\s*,\s*["']?(.*)["']?""", tool_arg, re.DOTALL)
                                 if m_notif_args:
@@ -1428,8 +1478,10 @@ class JarvisCore:
                             elif tool_name == "get_system_diagnostics":
                                 executed_actions["diagnostics"] = self.telemetry.get_snapshot().to_dict()
 
+                        return spoken_cleaned or "Executing your requested task, sir.", last_action, executed_actions, modified_files
 
                     raw_text = raw_resp.strip()
+
                     refusal_patterns = [
                         "i am not a retailer", "not a retailer", "i cannot assist with that",
                         "i will search the internet for you", "i will search for you",
