@@ -70,8 +70,11 @@ class ToolRegistry:
         self.browser_tools = BrowserTools(self.workspace_root)
         self.web_tools = WebTools(self.workspace_root)
         self.memory_tools = MemoryTools(self.workspace_root)
+        from vibe_studio.security.permission_broker import PermissionBroker
+        self.permission_broker = PermissionBroker(self.workspace_root)
         self._tools: dict[str, ToolDefinition] = {}
         self._register_default_tools()
+
 
     # ------------------------------------------------------------------
     # Registration
@@ -256,8 +259,20 @@ class ToolRegistry:
         if not ok:
             return _error_result(name, err)
 
+        # Permission & Policy Authorization Gate
+        from vibe_studio.security.permission_broker import PermissionDecision
+        decision = self.permission_broker.authorize_tool_execution(
+            tool_name=name,
+            risk=tool.risk,
+            requires_permission=tool.requires_permission,
+            args=args,
+        )
+        if decision == PermissionDecision.DENY:
+            return _error_result(name, f"Security Policy Violation: Execution of tool '{name}' was denied by PermissionBroker.")
+
         self._snapshot_before(name, args)
         start_time = time.monotonic()
+
 
         try:
             import inspect

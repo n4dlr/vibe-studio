@@ -17,9 +17,9 @@ class PermissionDecision(str, Enum):
 
 
 class PermissionBroker:
-    """Brokers permission requests for file access, commands, and network connections."""
+    """Brokers permission requests for file access, commands, and tool executions."""
 
-    def __init__(self, workspace_root: Path):
+    def __init__(self, workspace_root: Path | str = "."):
         self.workspace_root = Path(workspace_root).resolve()
         self.allowed_domains: List[str] = ["localhost", "127.0.0.1", "pypi.org", "registry.npmjs.org"]
 
@@ -42,4 +42,29 @@ class PermissionBroker:
             return PermissionDecision.DENY
         if assessment.risk_level == RiskLevel.HIGH and not allow_destructive:
             return PermissionDecision.ASK
+        return PermissionDecision.ALLOW
+
+    def authorize_tool_execution(
+        self,
+        tool_name: str,
+        risk: Any,
+        requires_permission: bool,
+        args: dict[str, Any],
+    ) -> PermissionDecision:
+        """Authorize tool execution based on risk, permissions, and security policy."""
+        # 1. File mutation tools: check file path boundary
+        if "path" in args or "source" in args:
+            p = args.get("path") or args.get("source") or ""
+            if p and self.authorize_file_access(str(p)) == PermissionDecision.DENY:
+                # If path escapes workspace (e.g. /etc/passwd or ../../), DENY
+                from vibe_studio.security.path_security import PathSecurity
+                if not PathSecurity.is_safe_workspace_path(str(p), self.workspace_root):
+                    return PermissionDecision.DENY
+
+        # 2. Command execution tools: check command safety
+        if "command" in args:
+            dec = self.authorize_command(str(args["command"]))
+            if dec == PermissionDecision.DENY:
+                return PermissionDecision.DENY
+
         return PermissionDecision.ALLOW

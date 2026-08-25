@@ -344,6 +344,38 @@ def test_jarvis_time_check_command(tmp_path: Path):
     assert "saat" in resp.spoken_text.lower()
 
 
+def test_jarvis_os_info_command(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("find mine operation system")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "os_info"
+    assert "operating system" in resp.spoken_text.lower()
+    assert "linux" in resp.spoken_text.lower() or "windows" in resp.spoken_text.lower() or "darwin" in resp.spoken_text.lower()
+
+
+def test_jarvis_create_file_desktop_shortcut(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("create a simple main.py file in desktop")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "write_file"
+    assert "main.py" in resp.spoken_text
+    assert len(resp.files_modified) > 0
+
+
+def test_jarvis_tolerant_tool_call_parsing(tmp_path: Path):
+    class MockMessyProvider:
+        def generate(self, prompt: str, **kwargs) -> str:
+            return "Alright, let's create the file. ```bash [TOOL: write_file(\"/Users/your_username/Desktop/script.py\", \"print('hi')\") ```"
+
+    jarvis = JarvisCore(workspace_root=tmp_path, provider=MockMessyProvider())
+    resp = jarvis.execute_command("create script.py on desktop")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "write_file"
+    assert any("script.py" in str(f) for f in resp.files_modified)
+
+
+
+
 
 
 

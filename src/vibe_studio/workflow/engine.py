@@ -182,18 +182,66 @@ class WorkflowPipeline:
 
         elif kind == NodeKind.PYTHON_SCRIPT:
             code = params.get("code", "output = $prev")
-            local_scope = {"$json": self.context.variables.get("$json", {}), "$prev": prev_data, "output": None}
             # Replace $ variables for python execution
             exec_code = code.replace("$json", "local_json").replace("$prev", "local_prev")
-            scope = {"local_json": self.context.variables.get("$json", {}), "local_prev": prev_data, "output": None}
-            exec(exec_code, {}, scope)
-            return scope.get("output", "Python executed successfully")
+
+            # 1. AST Security Analysis: Block dangerous imports and operations
+            import ast
+            try:
+                parsed_ast = ast.parse(exec_code)
+                for ast_node in ast.walk(parsed_ast):
+                    if isinstance(ast_node, (ast.Import, ast.ImportFrom)):
+                        for alias in getattr(ast_node, "names", []):
+                            if any(blocked in alias.name for blocked in ("subprocess", "shutil", "socket", "pty", "ctypes", "posix")):
+                                raise ValueError(f"Security: Import of module '{alias.name}' is blocked in workflow scripts.")
+                        if isinstance(ast_node, ast.ImportFrom) and ast_node.module:
+                            if any(blocked in ast_node.module for blocked in ("subprocess", "shutil", "socket", "pty", "ctypes", "posix")):
+                                raise ValueError(f"Security: Import from module '{ast_node.module}' is blocked in workflow scripts.")
+            except Exception as ast_err:
+                return {"status": "error", "message": f"Sandbox script rejected: {ast_err}"}
+
+            # 2. Restricted Safe Globals
+            import datetime
+            import json
+            import math
+            import re
+
+            safe_builtins = {
+                "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict, "enumerate": enumerate,
+                "filter": filter, "float": float, "int": int, "isinstance": isinstance, "len": len,
+                "list": list, "map": map, "max": max, "min": min, "range": range, "reversed": reversed,
+                "round": round, "set": set, "sorted": sorted, "str": str, "sum": sum, "tuple": tuple, "zip": zip,
+            }
+            safe_globals = {
+                "__builtins__": safe_builtins,
+                "math": math,
+                "json": json,
+                "re": re,
+                "datetime": datetime,
+            }
+            scope = {
+                "local_json": self.context.variables.get("$json", {}),
+                "local_prev": prev_data,
+                "output": None,
+            }
+            try:
+                exec(exec_code, safe_globals, scope)
+                return scope.get("output", "Python executed successfully")
+            except Exception as run_err:
+                return {"status": "error", "message": f"Execution error: {run_err}"}
 
         elif kind == NodeKind.SHELL_COMMAND:
             cmd = params.get("command", "echo 'Vibe Workflow'")
+            from vibe_studio.core.command_safety import CommandSafety, RiskLevel
+            assessment = CommandSafety.assess_risk(cmd, cwd=self.workspace_root, workspace_root=self.workspace_root)
+            if assessment.risk_level == RiskLevel.CRITICAL:
+                return {"exit_code": 1, "stdout": "", "stderr": f"CommandSafety Blocked: {', '.join(assessment.reasons)}"}
+
             import subprocess
             res = subprocess.run(cmd, shell=True, cwd=self.workspace_root, capture_output=True, text=True, timeout=30)
             return {"exit_code": res.returncode, "stdout": res.stdout.strip(), "stderr": res.stderr.strip()}
+
+
 
         elif kind == NodeKind.SUPER_AGENT_ACTION:
             prompt = params.get("prompt", "Analyze repository")

@@ -192,22 +192,7 @@ class JarvisCore:
             self._emit("command_completed", {"response": spoken, "result": result})
             return res
 
-        # 1h. WhatsApp Message: "whatsapdan tuncaya yaz salam necesen"
-        m_wamsg = (
-            re.search(r"(?:whatsap+dan|whatsap+da|whatsapp)\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s*(?:ya|yə|a|e|na|nə)?\s*(?:yaz|mesaj\s+yaz|mesaj\s+göndər)\s+(.+)", p)
-            or re.search(r"send\s+whatsapp\s+message\s+to\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s+(?:saying\s+|with\s+text\s+|:\s*)?(.+)", p)
-        )
-        if m_wamsg:
-            cname = m_wamsg.group(1).strip()
-            msg_text = m_wamsg.group(2).strip()
-            result = self.system_tools.whatsapp_message(cname, msg_text)
-            spoken = f"Opening WhatsApp message to {cname}, sir." if not is_az else f"{cname} üçün WhatsApp mesajı açılır, cənab."
-            self.speak(spoken)
-            res = JarvisResponse(spoken_text=spoken, action_taken="whatsapp_message", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
-            self._emit("command_completed", {"response": spoken, "result": result})
-            return res
-
-        # 1i. WhatsApp Call: "whatsapdan tuncayi ara", "whatsapp call tuncay", "call tuncay on whatsapp"
+        # 1h. WhatsApp Call: "whatsapdan tuncayi ara", "whatsapp call tuncay", "call tuncay on whatsapp"
         m_wacall = (
             re.search(r"(?:whatsap+dan|whatsap+da|whatsapp)\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s*(?:i|ı|u|ü|ə|e|ya|yə|a|na|nə)?\s*(?:ara|zəng\s+et|zeng\s+et|call)", p)
             or re.search(r"whatsapp\s+call\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)", p)
@@ -223,6 +208,23 @@ class JarvisCore:
             self.speak(spoken)
             res = JarvisResponse(spoken_text=spoken, action_taken="whatsapp_call", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
+        # 1i. WhatsApp Message: "whatsapdan tuncaya yaz salam necesen"
+        m_wamsg = (
+            re.search(r"(?:whatsap+dan|whatsap+da|whatsapp)\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s*(?:ya|yə|a|e|na|nə)?\s+(?:yaz|mesaj\s+yaz|mesaj\s+göndər)\s+(.+)", p)
+            or re.search(r"send\s+whatsapp\s+message\s+to\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s+(?:saying\s+|with\s+text\s+|:\s*)?(.+)", p)
+        )
+        if m_wamsg:
+            cname = m_wamsg.group(1).strip()
+            msg_text = m_wamsg.group(2).strip()
+            result = self.system_tools.whatsapp_message(cname, msg_text)
+            spoken = f"Opening WhatsApp message to {cname}, sir." if not is_az else f"{cname} üçün WhatsApp mesajı açılır, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="whatsapp_message", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
         # 1j. Live Weather: "hava necədir", "what is the weather in Baku"
         if any(k in p for k in ["hava", "weather", "havanı göstər", "havanı öyrən"]):
             m_city = re.search(r"(?:weather\s+in|hava)\s+([a-zA-ZçəğışöüÇƏĞIŞÖÜ]+)", p)
@@ -301,8 +303,54 @@ class JarvisCore:
             self._emit("command_completed", {"response": spoken})
             return res
 
+        # 1p. Operating System & Environment check
+        if any(k in p for k in ["operation system", "operating system", "mine os", "my os", "what os", "which os", "find mine operation", "hansı əməliyyat sistemi", "əməliyyat sistemi nədir", "hansı os", "os nədir"]):
+            snap = self.telemetry.get_snapshot()
+            gpu_info = f", GPU: {snap.gpu_name}" if snap.gpu_name else ""
+            spoken = (
+                f"Your operating system is {snap.os_name} on host '{snap.hostname}'{gpu_info}, sir."
+            ) if not is_az else (
+                f"Əməliyyat sisteminiz {snap.os_name}, kompüter adı '{snap.hostname}'-dir, cənab."
+            )
+            self.speak(spoken)
+            res = JarvisResponse(
+                spoken_text=spoken,
+                action_taken="os_info",
+                action_result={"os": snap.os_name, "hostname": snap.hostname, "gpu": snap.gpu_name},
+                telemetry=snap,
+                execution_time=time.monotonic() - t0,
+                model_used=self.model,
+            )
+            self._emit("command_completed", {"response": spoken, "result": snap.to_dict()})
+            return res
+
+        # 1q. Direct simple file creation shortcut on Desktop / Workspace
+        m_create_file = (
+            re.search(r"(?:create|make|write)\s+(?:a\s+|an\s+)?(?:simple\s+)?([a-zA-Z0-9_\-\.]+)\s+(?:file\s+)?(?:in|on)\s+(desktop|workspace|masaüstü)", p)
+            or re.search(r"(?:masaüstündə|desktopda)\s+([a-zA-Z0-9_\-\.]+)\s+(?:faylı\s+)?(?:yarat|aç)", p)
+        )
+        if m_create_file:
+            fname = m_create_file.group(1).strip()
+            loc = m_create_file.group(2).strip() if len(m_create_file.groups()) > 1 and m_create_file.group(2) else "desktop"
+            target_path = f"Desktop/{fname}" if "desk" in loc.lower() or "masa" in loc.lower() else fname
+            content = f"# {fname}\nprint('Hello from J.A.R.V.I.S on {loc}!')\n"
+            w_res = self.coding_bridge.write_file(target_path, content)
+            spoken = f"Created {fname} on your {loc} successfully, sir." if not is_az else f"{fname} faylı {loc} üzərində yaradıldı, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(
+                spoken_text=spoken,
+                action_taken="write_file",
+                action_result=w_res,
+                execution_time=time.monotonic() - t0,
+                model_used=self.model,
+                files_modified=[str(w_res.get("path", target_path))],
+            )
+            self._emit("command_completed", {"response": spoken, "result": w_res})
+            return res
+
         # 2. Specific Speedtest / Fast.com intent
         if "fast.com" in p or "speedtest" in p or "speed test" in p:
+
 
 
 
@@ -509,11 +557,19 @@ class JarvisCore:
 
     def _reason_with_agentic_llm(self, user_prompt: str, is_az: bool = False) -> tuple[str, str | None, dict[str, Any] | None, list[str]]:
         """Run full autonomous agentic reasoning with file tools, execution, and bilingual replies."""
+        snap = self.telemetry.get_snapshot()
         system_prompt = (
-            "You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), Tony Stark's autonomous AI assistant "
-            "and expert software engineer deeply integrated into the OS and Vibe Studio IDE.\n"
+            f"You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), Tony Stark's autonomous AI assistant "
+            f"and expert software engineer deeply integrated into the OS and Vibe Studio IDE.\n"
+            f"CURRENT SYSTEM CONTEXT:\n"
+            f"- Operating System: {snap.os_name}\n"
+            f"- Hostname: {snap.hostname}\n"
+            f"- User Desktop Path: {self.coding_bridge.desktop_dir}\n"
+            f"- Workspace Root: {self.workspace_root}\n"
+            f"- Active AI Model: {self.model}\n\n"
             "You are respectful, highly competent, concise, and address the user as 'sir' (or 'cənab' in Azerbaijani).\n"
-            "If the user asks in Azerbaijani, respond fluently and naturally in Azerbaijani.\n\n"
+            "If the user asks in Azerbaijani, respond fluently and naturally in Azerbaijani.\n"
+            f"When creating files on Desktop, use 'Desktop/filename' or '{self.coding_bridge.desktop_dir}/filename'.\n\n"
             "You have FULL AUTONOMOUS AGENTIC POWERS to write code, create files, run terminal commands, and control the OS.\n"
             "Whenever an action is required, emit one or more tool calls in this exact format:\n"
             "[TOOL: write_file(\"path\", \"content\")]\n"
@@ -546,10 +602,15 @@ class JarvisCore:
                     temperature=0.3,
                 )
                 if raw_resp:
-                    # Check for write_file tool call: [TOOL: write_file("filename", "content")]
-                    tool_matches = re.findall(r"\[TOOL:\s*([a-zA-Z_]+)\((.*?)\)\]", raw_resp, re.DOTALL)
+                    # Robust regex to extract tool calls even with missing closing brackets or markdown wrappers
+                    tool_matches = (
+                        re.findall(r"\[TOOL:\s*([a-zA-Z_]+)\s*\((.*?)\)\]", raw_resp, re.DOTALL)
+                        or re.findall(r"\[TOOL:\s*([a-zA-Z_]+)\s*\((.*?)(?:\)\s*```|\)\s*\"|\)|\]|$)", raw_resp, re.DOTALL)
+                    )
                     if tool_matches:
-                        spoken_cleaned = re.sub(r"\[TOOL:.*?\]", "", raw_resp, flags=re.DOTALL).strip()
+                        spoken_cleaned = re.sub(r"\[TOOL:.*?\]", "", raw_resp, flags=re.DOTALL)
+                        spoken_cleaned = re.sub(r"\[TOOL:.*", "", spoken_cleaned, flags=re.DOTALL).strip()
+                        spoken_cleaned = re.sub(r"```[a-zA-Z]*\s*```", "", spoken_cleaned).strip()
                         executed_actions: dict[str, Any] = {}
                         last_action = None
 
@@ -557,12 +618,16 @@ class JarvisCore:
                             last_action = tool_name
 
                             if tool_name == "write_file":
-                                m_wf = re.match(r"""["']([^"']+)["']\s*,\s*["']?(.*)["']?""", tool_arg, re.DOTALL)
+                                m_wf = (
+                                    re.match(r"""["']([^"']+)["']\s*,\s*["']?(.*)["']?""", tool_arg, re.DOTALL)
+                                    or re.match(r"""["']([^"']+)["']\s*,\s*(.*)""", tool_arg, re.DOTALL)
+                                )
                                 if m_wf:
-                                    fpath, fcontent = m_wf.group(1), m_wf.group(2)
+                                    fpath, fcontent = m_wf.group(1), m_wf.group(2).rstrip("\"' )`")
                                     res_wf = self.coding_bridge.write_file(fpath, fcontent)
                                     executed_actions[f"write_{fpath}"] = res_wf
                                     modified_files.append(fpath)
+
                             elif tool_name == "read_file":
                                 fpath = tool_arg.strip().strip('"\'')
                                 executed_actions[f"read_{fpath}"] = self.coding_bridge.read_file(fpath)

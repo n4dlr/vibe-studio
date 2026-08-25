@@ -1,10 +1,11 @@
 """JarvisCodingBridge — Full Autonomous Software Engineering Engine for J.A.R.V.I.S.
 
 Equips J.A.R.V.I.S to:
-1. Create, edit, and inspect workspace files (Python, JS, HTML, Rust, Go, C++, etc.)
+1. Create, edit, and inspect workspace and Desktop files (Python, JS, HTML, Rust, Go, C++, etc.)
 2. Run shell commands, automated tests, and syntax validation
-3. Delegate deep multi-file development to CodingAgent and SuperAgent
-4. Report accomplishments in natural Azerbaijani and English voice
+3. Smart path resolution (auto-resolves Desktop, Workspace, and cross-platform home paths)
+4. Delegate deep multi-file development to CodingAgent and SuperAgent
+5. Report accomplishments in natural Azerbaijani and English voice
 """
 from __future__ import annotations
 
@@ -22,33 +23,70 @@ class JarvisCodingBridge:
 
     def __init__(self, workspace_root: str | Path = ".") -> None:
         self.workspace_root = Path(workspace_root).resolve()
+        self.home_dir = Path.home()
+        self.desktop_dir = self.home_dir / "Desktop"
         self.registry = default_tool_registry
 
+    def resolve_target_path(self, file_path: str) -> Path:
+        """Robust path resolver: handles Desktop, Workspace, '~', and hallucinated paths."""
+        p = file_path.strip().strip("\"'")
+        if not p:
+            return self.workspace_root
+
+        # Expand home ~
+        if p.startswith("~"):
+            return Path(p).expanduser().resolve()
+
+        # Handle macOS / hallucinated user paths like /Users/your_username/Desktop/...
+        if p.startswith("/Users/") or p.startswith("/home/"):
+            parts = Path(p).parts
+            if "Desktop" in parts:
+                idx = parts.index("Desktop")
+                sub = Path(*parts[idx + 1:]) if len(parts) > idx + 1 else Path(".")
+                return (self.desktop_dir / sub).resolve()
+            return Path(p).resolve()
+
+        # Handle "Desktop/file" or "desktop/file"
+        if p.lower().startswith("desktop/"):
+            sub = p.split("/", 1)[1]
+            return (self.desktop_dir / sub).resolve()
+        elif p.lower() == "desktop":
+            return self.desktop_dir
+
+        # Handle absolute path
+        path_obj = Path(p)
+        if path_obj.is_absolute():
+            return path_obj.resolve()
+
+        # Workspace relative
+        return (self.workspace_root / p).resolve()
+
     def write_file(self, file_path: str, content: str) -> dict[str, Any]:
-        """Create or overwrite a file in workspace."""
+        """Create or overwrite a file in workspace or Desktop."""
         try:
-            target = (self.workspace_root / file_path).resolve()
+            target = self.resolve_target_path(file_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             return {
                 "status": "success",
-                "path": str(target.relative_to(self.workspace_root)),
+                "path": str(target),
+                "filename": target.name,
                 "bytes": len(content.encode("utf-8")),
-                "message": f"Successfully created/updated {target.name}",
+                "message": f"Successfully created/updated {target.name} at {target.parent}",
             }
         except Exception as e:
             return {"status": "error", "message": f"Failed to write {file_path}: {e}"}
 
     def read_file(self, file_path: str) -> dict[str, Any]:
-        """Read file content from workspace."""
+        """Read file content from workspace or Desktop."""
         try:
-            target = (self.workspace_root / file_path).resolve()
+            target = self.resolve_target_path(file_path)
             if not target.exists():
                 return {"status": "error", "message": f"File '{file_path}' does not exist."}
             content = target.read_text(encoding="utf-8", errors="replace")
             return {
                 "status": "success",
-                "path": str(target.relative_to(self.workspace_root)),
+                "path": str(target),
                 "content": content,
                 "lines": len(content.splitlines()),
             }
@@ -56,9 +94,9 @@ class JarvisCodingBridge:
             return {"status": "error", "message": f"Failed to read {file_path}: {e}"}
 
     def list_files(self, sub_dir: str = ".") -> dict[str, Any]:
-        """List files in the workspace or subdirectory."""
+        """List files in the workspace or directory."""
         try:
-            target_dir = (self.workspace_root / sub_dir).resolve()
+            target_dir = self.resolve_target_path(sub_dir)
             if not target_dir.exists():
                 return {"status": "error", "message": f"Directory '{sub_dir}' not found."}
 
@@ -71,7 +109,7 @@ class JarvisCodingBridge:
                     "is_dir": p.is_dir(),
                     "size": p.stat().st_size if p.is_file() else 0,
                 })
-            return {"status": "success", "entries": entries, "count": len(entries)}
+            return {"status": "success", "entries": entries, "count": len(entries), "path": str(target_dir)}
         except Exception as e:
             return {"status": "error", "message": f"Could not list directory: {e}"}
 

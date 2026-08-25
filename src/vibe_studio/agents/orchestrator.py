@@ -549,31 +549,62 @@ class AgentOrchestrator:
         prompt: str,
         num_candidates: int = 2,
     ) -> OrchestratedExecutionResult:
-        """Run Mixture of Agents (MoA) with Evolutionary Strategy selection.
+        """Run Mixture of Agents (MoA) with Sandboxed Isolated Candidate Environments.
 
-        Sütun 2: Each candidate uses a fitness-selected strategy from StrategyPool.
-        The winning strategy is evolved (fitness updated) based on review score.
+        Architecture:
+        1. Each candidate agent runs in an isolated ephemeral workspace snapshot.
+        2. Candidates never overwrite each other's files.
+        3. Diff proposals and verification scores are judged independently.
+        4. The winning candidate diff is applied ONCE to the real workspace.
         """
         import concurrent.futures
+        import os
+        import shutil
+        import tempfile
+
         self._notify_progress("moa_consensus_start", {"candidates": num_candidates})
 
-        def _run_proposal(agent_id: int):
-            # Select strategy per candidate
+        def _run_sandboxed_proposal(agent_id: int):
             strategy = self._strategy_pool.select(prompt)
-            agent = AutonomousAgent(
-                project_root=self.workspace_root,
-                provider=self.provider,
-                model=self.model,
-                autonomy_mode=AutonomyMode.AUTO,
-            )
-            res = agent.run(f"[PROPOSAL #{agent_id+1}] {prompt}")
-            diff_text = agent.tool_registry.patch_tools.history[-1].diff if agent.tool_registry.patch_tools.history else ""
-            review = self.reviewer.review_diff(diff_text)
-            return agent_id, res, review, strategy
+            # Create isolated ephemeral sandbox
+            with tempfile.TemporaryDirectory(prefix=f"vibe_moa_sandbox_{agent_id}_") as sandbox_dir:
+                sandbox_path = Path(sandbox_dir)
+                # Copy workspace files excluding heavy artifacts
+                for item in self.workspace_root.iterdir():
+                    if item.name in (".git", "__pycache__", ".venv", "node_modules", ".pytest_cache"):
+                        continue
+                    if item.is_dir():
+                        shutil.copytree(item, sandbox_path / item.name, symlinks=True, ignore=shutil.ignore_patterns("*.pyc", "__pycache__"))
+                    elif item.is_file():
+                        shutil.copy2(item, sandbox_path / item.name)
+
+                agent = AutonomousAgent(
+                    project_root=sandbox_path,
+                    provider=self.provider,
+                    model=self.model,
+                    autonomy_mode=AutonomyMode.AUTO,
+                )
+                res = agent.run(f"[PROPOSAL #{agent_id+1}] {prompt}")
+                diff_text = agent.tool_registry.patch_tools.history[-1].diff if agent.tool_registry.patch_tools.history else ""
+                modified_files = {}
+                # Capture all changed/new files in sandbox relative to original workspace
+                for root, _, files in os.walk(sandbox_path):
+                    for f in files:
+                        p_sand = Path(root) / f
+                        rel = p_sand.relative_to(sandbox_path)
+                        p_orig = self.workspace_root / rel
+                        try:
+                            if not p_orig.exists() or p_orig.read_bytes() != p_sand.read_bytes():
+                                modified_files[rel] = p_sand.read_bytes()
+                        except Exception:
+                            pass
+
+                review = self.reviewer.review_diff(diff_text)
+                return agent_id, res, review, strategy, modified_files
 
         proposals = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_candidates) as executor:
-            futures = [executor.submit(_run_proposal, i) for i in range(num_candidates)]
+            futures = [executor.submit(_run_sandboxed_proposal, i) for i in range(num_candidates)]
             for f in concurrent.futures.as_completed(futures):
                 try:
                     proposals.append(f.result())
@@ -581,17 +612,24 @@ class AgentOrchestrator:
                     logger.warning("MoA proposal execution failed: %s", exc)
 
         if proposals:
-            best_id, best_res, best_review, best_strategy = max(
+            best_id, best_res, best_review, best_strategy, best_modified_files = max(
                 proposals, key=lambda p: p[2].score
             )
-            # Sütun 2: Evolve the winning strategy
+            # Apply ONLY the winning candidate's modified files to the real workspace
+            for rel_path, file_bytes in best_modified_files.items():
+                dest = self.workspace_root / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(file_bytes)
+
+            # Evolve the winning strategy
             self._strategy_pool.evolve(best_strategy, score=float(best_review.score), prompt=prompt)
-            self._notify_progress("moa_judge_selected", {"best_id": best_id+1, "score": best_review.score})
+            self._notify_progress("moa_judge_selected", {"best_id": best_id+1, "score": best_review.score, "applied_files": len(best_modified_files)})
             return OrchestratedExecutionResult(
                 prompt=prompt,
                 execution_result=best_res,
                 review_result=best_review,
-                summary=f"MoA Judge selected Proposal #{best_id+1} (Score: {best_review.score}/100)",
+                summary=f"MoA Sandboxed Judge selected Proposal #{best_id+1} (Score: {best_review.score}/100, {len(best_modified_files)} files applied cleanly)",
             )
 
         return self.execute_task(prompt)
+
