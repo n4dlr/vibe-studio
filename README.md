@@ -15,6 +15,26 @@
 
 ---
 
+## ⚡ 1-Kliklə Avtomatlaşdırılmış Quraşdırma (1-Click Auto Setup)
+
+### 🪟 Windows Üçün:
+Sadəcə **`setup-windows.bat`** faylını iki dəfə klikləyin və ya CMD/PowerShell-də işə salın:
+```cmd
+setup-windows.bat
+```
+*(Avtomatik olaraq Python mühitini, bütün asılılıqları, Chromium drayverini quraşdırır və J.A.R.V.I.S-i açır).*
+
+### 🐧 Linux Üçün:
+Terminalda aşağıdakı əmri icra edin:
+```bash
+./setup_linux.sh
+# və ya
+./setup_linus.sh
+```
+*(Sistem paketlərini, `wmctrl`, `xdotool`, `ffmpeg`, virtual mühiti və J.A.R.V.I.S-i tam avtomatlaşdırılmış şəkildə hazırlayır).*
+
+---
+
 ## ⚡ Tez və Rahat Başlatma Komandaları (Quick Start)
 
 ### 1. 🤖 J.A.R.V.I.S Standalone Cockpit (Birbaşa J.A.R.V.I.S Pəncərəsini Açmaq)
@@ -41,6 +61,7 @@ vibe-studio gui
 ```bash
 vibe-studio server --port 8000
 ```
+
 
 ---
 

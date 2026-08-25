@@ -101,6 +101,18 @@ def test_window_control_and_keyboard(tmp_path: Path):
     t_res = tools.type_text("hello world")
     assert t_res["status"] in ("success", "simulated")
 
+    m_res = tools.click_mouse(100, 200, "left")
+    assert m_res["status"] in ("success", "simulated")
+    assert m_res["x"] == 100
+    assert m_res["y"] == 200
+
+
+def test_jarvis_play_music_defaults_to_youtube(tmp_path: Path):
+    tools = JarvisSystemTools(tmp_path)
+    res = tools.play_music("Queen Bohemian Rhapsody")
+    assert res["status"] == "success"
+    assert "youtube" in res["url"]
+
 
 def test_jarvis_core_super_suite_intents(tmp_path: Path):
     jarvis = JarvisCore(workspace_root=tmp_path)
@@ -117,11 +129,11 @@ def test_jarvis_core_super_suite_intents(tmp_path: Path):
     assert resp_yt.action_taken == "play_youtube"
     assert "youtube" in resp_yt.spoken_text.lower()
 
-    # 3. Spotify intent
+    # 3. Spotify intent (routes to zero-login YouTube music)
     resp_sp = jarvis.execute_command("spotify-da eminem oxut")
     assert isinstance(resp_sp, JarvisResponse)
     assert resp_sp.action_taken == "play_spotify"
-    assert "spotify" in resp_sp.spoken_text.lower()
+    assert "youtube" in resp_sp.spoken_text.lower() or "streaming" in resp_sp.spoken_text.lower()
 
     # 4. Global file search intent
     resp_find = jarvis.execute_command("bütün kompüterdə report tap")
@@ -143,3 +155,29 @@ def test_jarvis_core_super_suite_intents(tmp_path: Path):
     resp_win = jarvis.execute_command("tam ekran et")
     assert isinstance(resp_win, JarvisResponse)
     assert resp_win.action_taken == "window_control"
+
+
+def test_jarvis_llm_reasoning_super_suite_tool_execution(tmp_path: Path):
+    class SuperMockProvider:
+        def generate(self, prompt: str, **kwargs) -> str:
+            if "tea" in prompt.lower():
+                return 'Certainly, sir. Setting a timer for your tea. [TOOL: set_timer(300, "Tea")]'
+            elif "music" in prompt.lower():
+                return 'Playing your track right away, sir. [TOOL: play_music("Interstellar")]'
+            elif "notify" in prompt.lower():
+                return 'Sending notification, sir. [TOOL: show_notification("J.A.R.V.I.S.", "System updated")]'
+            return "At your command, sir."
+
+    jarvis = JarvisCore(workspace_root=tmp_path, provider=SuperMockProvider())
+    resp_timer = jarvis._reason_with_agentic_llm("Jarvis set timer for tea")
+    assert resp_timer[1] == "set_timer"
+    assert "set_timer" in resp_timer[2]
+
+    resp_music = jarvis._reason_with_agentic_llm("Jarvis play some music")
+    assert resp_music[1] == "play_music"
+    assert "play_music" in resp_music[2]
+
+    resp_notify = jarvis._reason_with_agentic_llm("Jarvis notify me when done")
+    assert resp_notify[1] == "show_notification"
+    assert "notification" in resp_notify[2]
+

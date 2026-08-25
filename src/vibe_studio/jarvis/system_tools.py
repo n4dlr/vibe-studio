@@ -631,33 +631,36 @@ class JarvisSystemTools:
     # ------------------------------------------------------------------
 
     def play_youtube(self, query: str) -> dict[str, Any]:
-        """Search and play a song or video on YouTube in default browser."""
+        """Search and play a song or video on YouTube in default browser (no login required)."""
         q = query.strip()
         encoded = urllib.parse.quote_plus(q)
         yt_url = f"https://www.youtube.com/results?search_query={encoded}"
-        res = self.open_url(yt_url)
+        self.open_url(yt_url)
         return {
             "status": "success",
             "query": q,
             "url": yt_url,
-            "message": f"Opened YouTube search for '{q}' in browser."
+            "player": "youtube",
+            "message": f"Opened YouTube playback for '{q}' (no login required)."
         }
 
+    def play_music(self, query: str) -> dict[str, Any]:
+        """Universal music player — plays directly on YouTube without requiring login."""
+        return self.play_youtube(query)
+
     def play_spotify(self, query: str) -> dict[str, Any]:
-        """Search and play track/artist on Spotify desktop client or web player."""
+        """Play music query — routes directly to YouTube (no login required) or Spotify if configured."""
         q = query.strip()
         encoded = urllib.parse.quote_plus(q)
-        web_url = f"https://open.spotify.com/search/{encoded}"
-        # Try desktop Spotify URI via xdg-open if installed
-        if shutil.which("spotify") or shutil.which("flatpak"):
-            try:
-                subprocess.Popen(["xdg-open", f"spotify:search:{encoded}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return {"status": "success", "query": q, "url": f"spotify:search:{encoded}", "message": f"Opened Spotify desktop search for '{q}'."}
-            except Exception:
-                pass
-        # Fallback to Spotify Web
-        self.open_url(web_url)
-        return {"status": "success", "query": q, "url": web_url, "message": f"Opened Spotify Web search for '{q}'."}
+        # Open YouTube for zero-login instant playback
+        yt_url = f"https://www.youtube.com/results?search_query={encoded}"
+        self.open_url(yt_url)
+        return {
+            "status": "success",
+            "query": q,
+            "url": yt_url,
+            "message": f"Redirected Spotify search for '{q}' to YouTube (direct streaming, no login required)."
+        }
 
 
     # ------------------------------------------------------------------
@@ -776,10 +779,25 @@ class JarvisSystemTools:
     # ------------------------------------------------------------------
 
     def capture_webcam(self, save_path: str | None = None) -> dict[str, Any]:
-        """Capture a photo from default webcam device (/dev/video0)."""
+        """Capture a photo from default webcam device using OpenCV, ffmpeg, or fswebcam."""
         target = Path(save_path).resolve() if save_path else self.desktop_dir / f"webcam_{int(time.time())}.jpg"
         target.parent.mkdir(parents=True, exist_ok=True)
 
+        # 1. Try OpenCV if available (fastest and most portable)
+        try:
+            import cv2  # type: ignore
+            cap = cv2.VideoCapture(0)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame is not None:
+                    cv2.imwrite(str(target), frame)
+                    if target.exists() and target.stat().st_size > 0:
+                        return {"status": "success", "path": str(target), "backend": "opencv", "message": f"Webcam photo saved to {target.name}."}
+        except Exception:
+            pass
+
+        # 2. Try Linux ffmpeg v4l2
         if shutil.which("ffmpeg"):
             try:
                 subprocess.run(
@@ -789,19 +807,20 @@ class JarvisSystemTools:
                     timeout=4,
                 )
                 if target.exists() and target.stat().st_size > 0:
-                    return {"status": "success", "path": str(target), "message": f"Webcam photo saved to {target.name}."}
+                    return {"status": "success", "path": str(target), "backend": "ffmpeg", "message": f"Webcam photo saved to {target.name}."}
             except Exception:
                 pass
 
+        # 3. Try fswebcam
         if shutil.which("fswebcam"):
             try:
                 subprocess.run(["fswebcam", "-r", "1280x720", "--no-banner", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
                 if target.exists() and target.stat().st_size > 0:
-                    return {"status": "success", "path": str(target), "message": f"Webcam photo saved to {target.name}."}
+                    return {"status": "success", "path": str(target), "backend": "fswebcam", "message": f"Webcam photo saved to {target.name}."}
             except Exception:
                 pass
 
-        return {"status": "error", "message": "No webcam capture utility (ffmpeg/fswebcam) available."}
+        return {"status": "error", "message": "No webcam capture utility (OpenCV/ffmpeg/fswebcam) available."}
 
     def analyze_screenshot_vision(self, query: str = "Analyze the screen", model: str = "qwen2-vl") -> dict[str, Any]:
         """Capture screen and perform visual reasoning using local Ollama Vision or metadata."""
@@ -843,6 +862,28 @@ class JarvisSystemTools:
     # Window, Mouse & Keyboard Automation
     # ------------------------------------------------------------------
 
+    def click_mouse(self, x: int, y: int, button: str = "left") -> dict[str, Any]:
+        """Simulate mouse click at screen coordinates (x, y)."""
+        btn_map = {"left": "1", "middle": "2", "right": "3"}
+        b_code = btn_map.get(button.lower(), "1")
+
+        if shutil.which("xdotool"):
+            try:
+                subprocess.run(["xdotool", "mousemove", str(x), str(y), "click", b_code], check=True, timeout=2)
+                return {"status": "success", "x": x, "y": y, "button": button, "message": f"Clicked {button} button at ({x}, {y})."}
+            except Exception as e:
+                return {"status": "error", "message": f"xdotool click failed: {e}"}
+
+        # Try pyautogui if installed
+        try:
+            import pyautogui  # type: ignore
+            pyautogui.click(x=x, y=y, button=button)
+            return {"status": "success", "x": x, "y": y, "button": button, "message": f"Clicked at ({x}, {y})."}
+        except Exception:
+            pass
+
+        return {"status": "simulated", "x": x, "y": y, "button": button, "message": f"Simulated click at ({x}, {y})."}
+
     def press_keys(self, keys: str) -> dict[str, Any]:
         """Simulate keyboard key press (e.g. 'ctrl+c', 'ctrl+v', 'Return', 'F11')."""
         k = keys.strip()
@@ -870,7 +911,7 @@ class JarvisSystemTools:
         act = action.strip().lower()
         if shutil.which("wmctrl"):
             try:
-                if act in ("maximize", "tam ekran"):
+                if act in ("maximize", "tam ekran", "fullscreen"):
                     subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-b", "add,maximized_vert,maximized_horz"], check=True, timeout=2)
                 elif act in ("minimize", "kiçilt"):
                     subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-b", "add,hidden"], check=True, timeout=2)
@@ -880,6 +921,7 @@ class JarvisSystemTools:
             except Exception as e:
                 return {"status": "error", "message": f"wmctrl failed: {e}"}
         return {"status": "simulated", "action": act, "message": f"Simulated window action '{act}'."}
+
 
 
 

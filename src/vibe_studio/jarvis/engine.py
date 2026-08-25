@@ -670,22 +670,23 @@ class JarvisCore:
         if m_yt and ("youtube" in p):
             yt_query = m_yt.group(1).strip()
             yt_res = self.system_tools.play_youtube(yt_query)
-            spoken = f"Opening YouTube for '{yt_query}', sir." if not is_az else f"YouTube-da '{yt_query}' axtarılır və oxudulur, cənab."
+            spoken = f"Opening YouTube for '{yt_query}' without requiring login, sir." if not is_az else f"YouTube-da '{yt_query}' oxudulur (login tələb olunmur), cənab."
             self.speak(spoken)
             res = JarvisResponse(spoken_text=spoken, action_taken="play_youtube", action_result=yt_res, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": yt_res})
             return res
 
-        # 1z. Direct Spotify Media Search: "spotify-da eminem çal", "play eminem on spotify"
+        # 1z. Direct Music / Spotify Media Search: defaults to YouTube without requiring login
         m_sp = (
             re.search(r"(?:play\s+)?(.+)\s+(?:on\s+spotify|in\s+spotify)", p)
             or re.search(r"spotify(?:-da|-də)?\s+(.+)\s+(?:aç|çal|oxut|axtar)", p)
             or re.search(r"spotify\s+(?:search\s+|axtar\s+)?(.+)", p)
+            or re.search(r"(?:play|çal|oxut)\s+(?:musiqi|mahnı|song|music)\s*(.+)?", p)
         )
-        if m_sp and ("spotify" in p):
-            sp_query = m_sp.group(1).strip()
-            sp_res = self.system_tools.play_spotify(sp_query)
-            spoken = f"Searching Spotify for '{sp_query}', sir." if not is_az else f"Spotify-da '{sp_query}' oxudulur, cənab."
+        if m_sp and any(k in p for k in ["spotify", "musiqi", "mahnı", "song", "music", "play"]):
+            sp_query = m_sp.group(1).strip() if m_sp.group(1) else "relaxing ambient music"
+            sp_res = self.system_tools.play_music(sp_query)
+            spoken = f"Streaming '{sp_query}' via YouTube without requiring login, sir." if not is_az else f"YouTube üzərindən '{sp_query}' oxudulur (login tələb olunmur), cənab."
             self.speak(spoken)
             res = JarvisResponse(spoken_text=spoken, action_taken="play_spotify", action_result=sp_res, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": sp_res})
@@ -992,7 +993,22 @@ class JarvisCore:
             "[TOOL: run_tests()]\n"
             "[TOOL: open_app(\"brave\" | \"tlauncher\" | \"steam\" | \"terminal\" | \"calculator\" | \"files\" | \"code\" | \"url\")]\n"
             "[TOOL: search_web(\"query\")]\n"
+            "[TOOL: play_music(\"song_or_artist_query\")]\n"
+            "[TOOL: play_youtube(\"query\")]\n"
+            "[TOOL: play_spotify(\"query\")]\n"
+            "[TOOL: set_timer(seconds, \"label\")]\n"
+            "[TOOL: set_alarm(\"HH:MM\", \"label\")]\n"
+            "[TOOL: list_timers()]\n"
+            "[TOOL: cancel_timer(\"id_or_label\")]\n"
+            "[TOOL: find_files(\"pattern\")]\n"
+            "[TOOL: show_notification(\"title\", \"message\")]\n"
             "[TOOL: take_screenshot()]\n"
+            "[TOOL: analyze_vision(\"query\")]\n"
+            "[TOOL: capture_webcam()]\n"
+            "[TOOL: window_control(\"maximize\" | \"minimize\" | \"close\")]\n"
+            "[TOOL: click_mouse(x, y)]\n"
+            "[TOOL: press_keys(\"keys\")]\n"
+            "[TOOL: type_text(\"text\")]\n"
             "[TOOL: lock_screen()]\n"
             "[TOOL: whatsapp_call(\"contact_name\")]\n"
             "[TOOL: whatsapp_message(\"contact_name\", \"message_text\")]\n"
@@ -1058,8 +1074,54 @@ class JarvisCore:
                             elif tool_name == "search_web":
                                 query = tool_arg.strip().strip('"\'')
                                 executed_actions[f"search_{query}"] = self.system_tools.search_web(query)
+                            elif tool_name in ("play_music", "play_youtube", "play_spotify"):
+                                query = tool_arg.strip().strip('"\'')
+                                executed_actions["play_music"] = self.system_tools.play_music(query)
+                            elif tool_name == "set_timer":
+                                m_tm = re.match(r"""(\d+(?:\.\d+)?)\s*(?:,\s*["']?(.*?)["']?)?$""", tool_arg.strip())
+                                if m_tm:
+                                    s_val = float(m_tm.group(1))
+                                    s_lbl = m_tm.group(2) or "Timer"
+                                    executed_actions["set_timer"] = self.scheduler.set_timer(s_val, s_lbl).to_dict()
+                            elif tool_name == "set_alarm":
+                                m_al = re.match(r"""["']?(\d{1,2}:\d{2})["']?\s*(?:,\s*["']?(.*?)["']?)?$""", tool_arg.strip())
+                                if m_al:
+                                    a_item = self.scheduler.set_alarm(m_al.group(1), m_al.group(2) or "Alarm")
+                                    executed_actions["set_alarm"] = a_item.to_dict() if a_item else {}
+                            elif tool_name == "list_timers":
+                                executed_actions["timers"] = [t.to_dict() for t in self.scheduler.list_active_timers()]
+                            elif tool_name == "cancel_timer":
+                                t_target = tool_arg.strip().strip('"\'')
+                                executed_actions["cancel_timer"] = self.scheduler.cancel_timer(t_target)
+                            elif tool_name == "find_files":
+                                f_pat = tool_arg.strip().strip('"\'')
+                                executed_actions["find_files"] = self.system_tools.find_files_global(f_pat)
+                            elif tool_name == "show_notification":
+                                m_notif_args = re.match(r"""["']([^"']+)["']\s*,\s*["']?(.*)["']?""", tool_arg, re.DOTALL)
+                                if m_notif_args:
+                                    executed_actions["notification"] = self.system_tools.show_desktop_notification(m_notif_args.group(1), m_notif_args.group(2))
+                                else:
+                                    executed_actions["notification"] = self.system_tools.show_desktop_notification("J.A.R.V.I.S.", tool_arg.strip().strip('"\''))
                             elif tool_name == "take_screenshot":
                                 executed_actions["screenshot"] = self.system_tools.take_screenshot()
+                            elif tool_name == "analyze_vision":
+                                q_vis = tool_arg.strip().strip('"\'') or "Analyze screen"
+                                executed_actions["vision"] = self.system_tools.analyze_screenshot_vision(q_vis)
+                            elif tool_name == "capture_webcam":
+                                executed_actions["webcam"] = self.system_tools.capture_webcam()
+                            elif tool_name == "window_control":
+                                w_act = tool_arg.strip().strip('"\'')
+                                executed_actions["window_control"] = self.system_tools.window_control(w_act)
+                            elif tool_name == "click_mouse":
+                                m_clk = re.match(r"(\d+)\s*,\s*(\d+)", tool_arg.strip())
+                                if m_clk:
+                                    executed_actions["click_mouse"] = self.system_tools.click_mouse(int(m_clk.group(1)), int(m_clk.group(2)))
+                            elif tool_name == "press_keys":
+                                p_k = tool_arg.strip().strip('"\'')
+                                executed_actions["press_keys"] = self.system_tools.press_keys(p_k)
+                            elif tool_name == "type_text":
+                                t_txt = tool_arg.strip().strip('"\'')
+                                executed_actions["type_text"] = self.system_tools.type_text(t_txt)
                             elif tool_name == "lock_screen":
                                 executed_actions["lock_screen"] = self.system_tools.lock_screen()
                             elif tool_name == "whatsapp_call":
@@ -1083,7 +1145,6 @@ class JarvisCore:
                             elif tool_name == "get_system_diagnostics":
                                 executed_actions["diagnostics"] = self.telemetry.get_snapshot().to_dict()
 
-
                         return spoken_cleaned or "Executing your requested task, sir.", last_action, executed_actions, modified_files
 
                     return raw_resp.strip(), "llm_dialogue", None, []
@@ -1093,3 +1154,4 @@ class JarvisCore:
         # Fallback
         fallback = f"Right away, sir. Executing: '{user_prompt}'." if not is_az else f"Oldu, cənab. '{user_prompt}' sorğusunu icra edirəm."
         return fallback, "fallback", None, []
+
