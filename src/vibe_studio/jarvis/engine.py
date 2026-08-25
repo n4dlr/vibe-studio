@@ -43,26 +43,45 @@ class JarvisCore:
     """Full Agentic AI Assistant, Software Engineer, and Desktop Intelligence."""
 
     DEFAULT_MODELS = [
-        "qwen2.5-coder:14b",
-        "qwen3:8b",
-        "deepseek-coder-v2:lite",
+        "qwen2.5-coder:3b",
         "qwen2.5-coder:7b",
+        "deepseek-coder:6.7b",
+        "deepseek-r1:7b",
+        "qwen2.5-coder:1.5b",
+        "deepseek-r1:1.5b",
         "gemma3:4b",
-        "llama3.1",
+        "starcoder2:3b",
+        "codellama:7b",
+        "qwen2.5-coder:14b",
+        "deepseek-coder-v2:lite",
     ]
 
-    def __init__(self, workspace_root: str | Path = ".", provider: Any = None, model: str = "qwen2.5-coder:14b"):
+    def __init__(self, workspace_root: str | Path = ".", provider: Any = None, model: str = "qwen2.5-coder:3b"):
+
         self.workspace_root = Path(workspace_root).resolve()
         self.provider = provider or OllamaProvider()
         self.model = model
+
         self.telemetry = SystemTelemetry()
         self.system_tools = JarvisSystemTools(self.workspace_root)
         self.coding_bridge = JarvisCodingBridge(self.workspace_root)
         self.voice_engine = JarvisVoiceEngine()
-        self.voice_listener = JarvisVoiceListener()
+        self.voice_listener = JarvisVoiceListener(
+            on_text_recognized=self._on_voice_transcribed,
+            on_wake_word=self._on_wake_word_triggered,
+        )
         self.watchdog = JarvisWatchdog(self.telemetry, on_alert=self._on_watchdog_alert)
         self.scheduler = JarvisScheduler(on_trigger=self._on_scheduler_trigger)
         self.event_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
+
+    def _on_voice_transcribed(self, text: str) -> None:
+        self._emit("voice_transcribed", {"text": text})
+
+    def _on_wake_word_triggered(self, prompt: str) -> None:
+        self._emit("wake_word_triggered", {"prompt": prompt})
+        if prompt:
+            self.execute_command(prompt)
+
 
 
     def set_model(self, model_name: str) -> None:
@@ -294,14 +313,30 @@ class JarvisCore:
             self._emit("command_completed", {"response": spoken})
             return res
 
-        # 1e. Web search: "search for X", "google for X"
-        m_search = re.search(r"(?:search\s+(?:for|the\s+web\s+for)?|google\s+(?:for)?)\s+(.+)", p)
+        # 1e. Web search & live price / info lookup:
+        m_search = re.search(
+            r"(?:search\s+(?:for|the\s+web\s+for|in\s+internet\s+for|in\s+internet)?|google\s+(?:for)?|internetdən\s+(?:mənə\s+)?|internetdə\s+(?:axtar\s+)?|say\s+(?:to\s+(?:men|me)\s+)?latest\s+|tell\s+me\s+about\s+|find\s+(?:out\s+)?(?:the\s+)?prices?\s+of\s+)(.+)",
+            p
+        )
         if m_search:
             query = m_search.group(1).strip().rstrip(".,!?")
+            query = re.sub(r"\b(?:tapıb\s+de|tap|de|axtar)\b", "", query, flags=re.IGNORECASE).strip()
+            if not query or len(query) < 2:
+                query = p
             result = self.system_tools.search_web(query)
-            spoken = f"Searching Google for '{query}', sir."
+            snips = result.get("snippets", [])
+            if snips:
+                top_info = snips[0]
+                if len(top_info) > 220:
+                    top_info = top_info[:220] + "..."
+                spoken = f"According to web data for '{query}': {top_info}" if not is_az else f"'{query}' üzrə internet məlumatı: {top_info}"
+            else:
+                spoken = f"Searching the web for '{query}', sir." if not is_az else f"'{query}' üçün internetdə axtarış edirəm, cənab."
             self.speak(spoken)
             res = JarvisResponse(spoken_text=spoken, action_taken="search_web", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": result})
+            return res
+
         # 1f. Screen Lock / Cihazı Kilidlə
         if any(k in p for k in ["lock screen", "lock the screen", "lock computer", "lock pc", "lock device", "lock session", "cihazı kilitle", "cihazı kilidlə", "ekranı kilitle", "ekranı kilidlə", "kilitle", "kilidlə", "kompüteri kilidlə"]):
             result = self.system_tools.lock_screen()
@@ -310,6 +345,7 @@ class JarvisCore:
             res = JarvisResponse(spoken_text=spoken, action_taken="lock_screen", action_result=result, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": result})
             return res
+
 
         # 1g. Save Contact: "save contact tuncay +994501234567"
         m_save = re.search(r"(?:save\s+contact|kontakt\s+əlavə\s+et|kontakt\s+saxla|yadda\s+saxla)\s+([a-zA-Z0-9_əşçğöüƏŞÇĞÖÜ]+)\s+([\+0-9\s\-]+)", p)
@@ -661,36 +697,41 @@ class JarvisCore:
                 self._emit("command_completed", {"response": spoken})
                 return res
 
-        # 1y. Direct YouTube Media Search: "youtube-da Hans Zimmer çal", "play interstellar on youtube"
-        m_yt = (
-            re.search(r"(?:play\s+)?(.+)\s+(?:on\s+youtube|in\s+youtube)", p)
-            or re.search(r"youtube(?:-da|-də)?\s+(.+)\s+(?:aç|çal|oxut|axtar)", p)
-            or re.search(r"youtube\s+(?:search\s+|axtar\s+)?(.+)", p)
+        # 1x. Play First / Auto-play Video: "browserde 1ci mahnini ac", "play first one", "play the first song"
+        if any(k in p for k in [
+            "1ci mahnini", "1-ci mahnı", "1ci mahnı", "birinci mahnı", "ilk mahnı", "ilk video",
+            "play first", "play the first", "first one", "first song", "first video"
+        ]):
+            m_target = self.system_tools.last_media_query or "popular trending music"
+            yt_res = self.system_tools.play_youtube(m_target, direct_play=True)
+            spoken = f"Directly playing the first video for '{m_target}', sir." if not is_az else f"'{m_target}' üzrə birinci video birbaşa başladılır, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="play_first_video", action_result=yt_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": yt_res})
+            return res
+
+        # 1y. Direct YouTube & Music Player: "inna caliente musiqisini ac", "youtube-da Hans Zimmer çal", "play interstellar"
+        m_music_all = (
+            re.search(r"(.+?)\s+(?:musiqisini|mahnısını|mahnisi|musiqisi)\s+(?:aç|çal|oxut|başlat|ac)", p)
+            or re.search(r"(?:aç|çal|oxut|başlat|ac)\s+(.+?)\s+(?:musiqisini|mahnısını|mahnisi|musiqisi)", p)
+            or re.search(r"(?:musiqi|mahnı|mahni|song|music)\s+(?:aç|çal|oxut|başlat|play|ac)\s*(.+)?", p)
+            or re.search(r"youtube(?:-da|-də)?\s+(.+?)\s+(?:aç|çal|oxut|axtar|başlat|ac)", p)
+            or re.search(r"spotify(?:-da|-də)?\s+(.+?)\s+(?:aç|çal|oxut|axtar|başlat|ac)", p)
+            or re.search(r"(?:play|çal|oxut)\s+(.+?)\s+(?:on\s+youtube|in\s+youtube|on\s+ytb|in\s+ytb|on\s+spotify)", p)
+            or re.search(r"(?:open\s+(?:the\s+)?)(.+?)\s+(?:music|song)?\s*(?:in\s+ytb|on\s+ytb|in\s+youtube|on\s+youtube)", p)
+            or re.search(r"(?:play|çal|oxut)\s+(.+)", p)
         )
-        if m_yt and ("youtube" in p):
-            yt_query = m_yt.group(1).strip()
-            yt_res = self.system_tools.play_youtube(yt_query)
-            spoken = f"Opening YouTube for '{yt_query}' without requiring login, sir." if not is_az else f"YouTube-da '{yt_query}' oxudulur (login tələb olunmur), cənab."
+        if m_music_all and any(k in p for k in ["youtube", "ytb", "spotify", "musiqi", "mahnı", "mahni", "song", "music", "play", "çal", "oxut"]):
+            yt_query = (m_music_all.group(1) or "relaxing music").strip()
+            # Clean filler words
+            yt_query = re.sub(r"^(?:the|a)\s+", "", yt_query, flags=re.IGNORECASE).strip()
+            yt_res = self.system_tools.play_youtube(yt_query, direct_play=True)
+            spoken = f"Directly playing '{yt_query}' via YouTube, sir." if not is_az else f"YouTube üzərindən '{yt_query}' mahnısı birbaşa başladılır, cənab."
             self.speak(spoken)
             res = JarvisResponse(spoken_text=spoken, action_taken="play_youtube", action_result=yt_res, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken, "result": yt_res})
             return res
 
-        # 1z. Direct Music / Spotify Media Search: defaults to YouTube without requiring login
-        m_sp = (
-            re.search(r"(?:play\s+)?(.+)\s+(?:on\s+spotify|in\s+spotify)", p)
-            or re.search(r"spotify(?:-da|-də)?\s+(.+)\s+(?:aç|çal|oxut|axtar)", p)
-            or re.search(r"spotify\s+(?:search\s+|axtar\s+)?(.+)", p)
-            or re.search(r"(?:play|çal|oxut)\s+(?:musiqi|mahnı|song|music)\s*(.+)?", p)
-        )
-        if m_sp and any(k in p for k in ["spotify", "musiqi", "mahnı", "song", "music", "play"]):
-            sp_query = m_sp.group(1).strip() if m_sp.group(1) else "relaxing ambient music"
-            sp_res = self.system_tools.play_music(sp_query)
-            spoken = f"Streaming '{sp_query}' via YouTube without requiring login, sir." if not is_az else f"YouTube üzərindən '{sp_query}' oxudulur (login tələb olunmur), cənab."
-            self.speak(spoken)
-            res = JarvisResponse(spoken_text=spoken, action_taken="play_spotify", action_result=sp_res, execution_time=time.monotonic() - t0, model_used=self.model)
-            self._emit("command_completed", {"response": spoken, "result": sp_res})
-            return res
 
         # 1aa. Global Deep Disk File Search: "bütün kompüterdə report.pdf tap", "find all pdf files"
         if any(k in p for k in ["find file", "find files", "kompüterdə tap", "bütün kompüterdə", "şəkilləri tap", "sənədləri tap"]):
@@ -753,6 +794,187 @@ class JarvisCore:
             res = JarvisResponse(spoken_text=spoken, action_taken="window_control", action_result=w_res, execution_time=time.monotonic() - t0, model_used=self.model)
             self._emit("command_completed", {"response": spoken})
             return res
+
+        # 1ae. Neural Voice Gender & Persona Switching: "qadın səsinə keç", "kişi səsinə keç", "switch to female voice"
+        if any(k in p for k in ["qadın səsinə keç", "qadın səsi", "qız səsi", "switch to female voice", "use female voice", "banu səsi", "friday voice"]):
+            v_info = self.voice_engine.set_gender("female")
+            spoken = "Səs təbii qadın səsinə (Banu) keçirildi, cənab." if is_az else "Switched to natural female neural voice (Friday), sir."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_voice_gender", action_result=v_info, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "voice": v_info})
+            return res
+        elif any(k in p for k in ["kişi səsinə keç", "kişi səsi", "oğlan səsi", "switch to male voice", "use male voice", "babək səsi", "jarvis voice"]):
+            v_info = self.voice_engine.set_gender("male")
+            spoken = "Səs klassik kişi səsinə (Babək) keçirildi, cənab." if is_az else "Switched to classic male neural voice (Jarvis), sir."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_voice_gender", action_result=v_info, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "voice": v_info})
+            return res
+
+        # 1af. Continuous Wake-Word Daemon: "canlı qulaq asmanı aktivləşdir", "enable wake word", "wake word söndür"
+        if any(k in p for k in ["canlı qulaq asmanı aktivləşdir", "canlı qulaq asmanı aç", "enable wake word", "start listening", "wake word aktiv"]):
+            self.voice_listener.start_wake_word_daemon()
+            spoken = "Canlı 'Hey Jarvis' qulaq asma xidməti aktivləşdirildi, cənab." if is_az else "Continuous 'Hey Jarvis' wake-word daemon enabled, sir."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="start_wake_word", action_result={"status": "active"}, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["canlı qulaq asmanı dayandır", "canlı qulaq asmanı söndür", "disable wake word", "stop listening"]):
+            self.voice_listener.stop_wake_word_daemon()
+            spoken = "Canlı qulaq asma xidməti dayandırıldı, cənab." if is_az else "Wake-word daemon stopped, sir."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="stop_wake_word", action_result={"status": "inactive"}, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 1ag. Active Browser Tab & Live Content Reader: "bu səhifəni oxu", "bu səhifəni ümumiləşdir", "read current page", "summarize tab"
+        if any(k in p for k in ["bu səhifəni oxu", "bu səhifəni ümumiləşdir", "read current page", "read active tab", "summarize tab", "summarize page", "açıq səhifəni oxu"]):
+            tab_res = self.system_tools.read_active_browser_tab()
+            spoken = f"Active tab title: '{tab_res.get('title')}', sir." if not is_az else f"Aktiv səhifə oxunur: '{tab_res.get('title')}', cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="read_active_browser_tab", action_result=tab_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": tab_res})
+            return res
+
+        # 1ah. Visual OCR Mouse Clicker: "ekrandakı '...' düyməsinə bas", "click '...' on screen"
+        m_vclick = re.search(r"(?:click|kliklə|bas)\s+['\"]?(.+?)['\"]?\s*(?:on\s+screen|düyməsinə|düyməsinə\s+bas)?$", p)
+        if m_vclick and any(k in p for k in ["on screen", "düyməsinə", "kliklə", "ekrandakı"]):
+            target_txt = m_vclick.group(1).strip()
+            c_res = self.system_tools.click_element_by_text(target_txt)
+            spoken = f"Clicked visual target '{target_txt}', sir." if not is_az else f"Ekrandakı '{target_txt}' hədəfinə klikləndi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="click_element_by_text", action_result=c_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": c_res})
+            return res
+
+        # 1ai. Wi-Fi & Bluetooth Wireless Management: "wifi yandır", "wifi söndür", "wifi axtar", "bluetooth yandır"
+        if any(k in p for k in ["wifi yandır", "wifi aç", "enable wifi", "turn on wifi"]):
+            wf_res = self.system_tools.manage_wifi("on")
+            spoken = "Wi-Fi radio enabled, sir." if not is_az else "Wi-Fi şəbəkəsi aktivləşdirildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="manage_wifi", action_result=wf_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["wifi söndür", "wifi bağla", "disable wifi", "turn off wifi"]):
+            wf_res = self.system_tools.manage_wifi("off")
+            spoken = "Wi-Fi radio disabled, sir." if not is_az else "Wi-Fi şəbəkəsi söndürüldü, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="manage_wifi", action_result=wf_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["wifi axtar", "scan wifi", "list wifi", "wifi şəbəkələri"]):
+            wf_res = self.system_tools.manage_wifi("scan")
+            spoken = f"Found {len(wf_res.get('networks', []))} Wi-Fi networks, sir." if not is_az else f"{len(wf_res.get('networks', []))} Wi-Fi şəbəkəsi aşkarlandı, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="manage_wifi", action_result=wf_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": wf_res})
+            return res
+        elif any(k in p for k in ["bluetooth yandır", "bluetooth aç", "enable bluetooth", "turn on bluetooth"]):
+            bt_res = self.system_tools.manage_bluetooth("on")
+            spoken = "Bluetooth powered on, sir." if not is_az else "Bluetooth aktivləşdirildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="manage_bluetooth", action_result=bt_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["bluetooth söndür", "bluetooth bağla", "disable bluetooth", "turn off bluetooth"]):
+            bt_res = self.system_tools.manage_bluetooth("off")
+            spoken = "Bluetooth powered off, sir." if not is_az else "Bluetooth söndürüldü, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="manage_bluetooth", action_result=bt_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["bluetooth axtar", "scan bluetooth", "bluetooth cihazları"]):
+            bt_res = self.system_tools.manage_bluetooth("scan")
+            spoken = f"Found {len(bt_res.get('devices', []))} Bluetooth devices, sir." if not is_az else f"{len(bt_res.get('devices', []))} Bluetooth cihazı aşkarlandı, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="manage_bluetooth", action_result=bt_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": bt_res})
+            return res
+
+        # 1aj. Multi-Monitor & Display Management
+        if any(k in p for k in ["monitorları göstər", "list displays", "ekranları göstər", "display info", "monitor status"]):
+            mon_res = self.system_tools.get_display_monitors()
+            cnt = mon_res.get("count", 1)
+            spoken = f"Detected {cnt} connected display monitor(s), sir." if not is_az else f"Sistemdə {cnt} qoşulmuş monitor aşkarlandı, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="get_display_monitors", action_result=mon_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": mon_res})
+            return res
+        elif any(k in p for k in ["monitora keçir", "move window to monitor", "ekrana keçir"]):
+            m_idx = 1
+            idx_m = re.search(r"(\d+)", p)
+            if idx_m:
+                m_idx = int(idx_m.group(1)) - 1
+            m_res = self.system_tools.move_window_to_monitor(max(0, m_idx))
+            spoken = f"Moved active window to monitor {m_idx + 1}, sir." if not is_az else f"Aktiv pəncərə {m_idx + 1}-ci monitora keçirildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="move_window_to_monitor", action_result=m_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 1ak. Deep System Power & Performance Control
+        if any(k in p for k in ["performans rejimi", "set performance mode", "turbo mode", "high performance"]):
+            p_res = self.system_tools.set_power_profile("performance")
+            spoken = "System power profile switched to High Performance, sir." if not is_az else "Sistem yüksək performans rejiminə keçirildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_power_profile", action_result=p_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["qənaət rejimi", "eco mode", "power saver mode", "enerjiyə qənaət"]):
+            p_res = self.system_tools.set_power_profile("power-saver")
+            spoken = "System power profile switched to Power-Saver, sir." if not is_az else "Sistem enerjiyə qənaət rejiminə keçirildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_power_profile", action_result=p_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["balans rejimi", "balanced mode"]):
+            p_res = self.system_tools.set_power_profile("balanced")
+            spoken = "System power profile switched to Balanced, sir." if not is_az else "Sistem balanslaşdırılmış rejimə keçirildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_power_profile", action_result=p_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["batareya", "battery status", "zaryadka", "power status"]):
+            b_res = self.system_tools.get_battery_status()
+            spoken = f"Battery is at {b_res.get('percent', 100):.0f}%, sir." if not is_az else f"Batareya səviyyəsi {b_res.get('percent', 100):.0f}% təşkil edir, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="get_battery_status", action_result=b_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken, "result": b_res})
+            return res
+
+        # 1al. Night Light / Gecə İşığı
+        if any(k in p for k in ["gecə işığını yandır", "gecə rejimini yandır", "enable night light"]):
+            nl_res = self.system_tools.set_night_light(True)
+            spoken = "Night Light filter enabled, sir." if not is_az else "Gecə işığı filtri aktivləşdirildi, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_night_light", action_result=nl_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["gecə işığını söndür", "gecə rejimini söndür", "disable night light"]):
+            nl_res = self.system_tools.set_night_light(False)
+            spoken = "Night Light filter disabled, sir." if not is_az else "Gecə işığı filtri söndürüldü, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="set_night_light", action_result=nl_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+        # 1am. Mouse Scroll & Hotkey Automation
+        if any(k in p for k in ["aşağı sürüşdür", "scroll down"]):
+            sc_res = self.system_tools.scroll_mouse("down", 6)
+            spoken = "Scrolled down, sir." if not is_az else "Aşağı sürüşdürüldü, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="scroll_mouse", action_result=sc_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+        elif any(k in p for k in ["yuxarı sürüşdür", "scroll up"]):
+            sc_res = self.system_tools.scroll_mouse("up", 6)
+            spoken = "Scrolled up, sir." if not is_az else "Yuxarı sürüşdürüldü, cənab."
+            self.speak(spoken)
+            res = JarvisResponse(spoken_text=spoken, action_taken="scroll_mouse", action_result=sc_res, execution_time=time.monotonic() - t0, model_used=self.model)
+            self._emit("command_completed", {"response": spoken})
+            return res
+
+
 
         # 2. Specific Speedtest / Fast.com intent
         if "fast.com" in p or "speedtest" in p or "speed test" in p:
@@ -983,7 +1205,6 @@ class JarvisCore:
             "You are respectful, highly competent, concise, and address the user as 'sir' (or 'cənab' in Azerbaijani).\n"
             "If the user asks in Azerbaijani, respond fluently and naturally in Azerbaijani.\n"
             f"When creating files on Desktop, use 'Desktop/filename' or '{self.coding_bridge.desktop_dir}/filename'.\n\n"
-
             "You have FULL AUTONOMOUS AGENTIC POWERS to write code, create files, run terminal commands, and control the OS.\n"
             "Whenever an action is required, emit one or more tool calls in this exact format:\n"
             "[TOOL: write_file(\"path\", \"content\")]\n"
@@ -998,10 +1219,16 @@ class JarvisCore:
             "[TOOL: play_spotify(\"query\")]\n"
             "[TOOL: set_timer(seconds, \"label\")]\n"
             "[TOOL: set_alarm(\"HH:MM\", \"label\")]\n"
+
             "[TOOL: list_timers()]\n"
             "[TOOL: cancel_timer(\"id_or_label\")]\n"
             "[TOOL: find_files(\"pattern\")]\n"
             "[TOOL: show_notification(\"title\", \"message\")]\n"
+            "[TOOL: set_voice_gender(\"female\" | \"male\")]\n"
+            "[TOOL: read_active_browser_tab()]\n"
+            "[TOOL: click_element_by_text(\"button_text\")]\n"
+            "[TOOL: manage_wifi(\"on\" | \"off\" | \"scan\")]\n"
+            "[TOOL: manage_bluetooth(\"on\" | \"off\" | \"scan\")]\n"
             "[TOOL: take_screenshot()]\n"
             "[TOOL: analyze_vision(\"query\")]\n"
             "[TOOL: capture_webcam()]\n"
@@ -1016,9 +1243,19 @@ class JarvisCore:
             "[TOOL: kill_process(\"name_or_pid\")]\n"
             "[TOOL: clean_cache()]\n"
             "[TOOL: get_network_info()]\n"
-            "[TOOL: get_system_diagnostics()]\n\n"
+            "[TOOL: get_system_diagnostics()]\n"
+            "[TOOL: get_display_monitors()]\n"
+            "[TOOL: move_window_to_monitor(index)]\n"
+            "[TOOL: set_power_profile(\"performance\" | \"balanced\" | \"power-saver\")]\n"
+            "[TOOL: get_battery_status()]\n"
+            "[TOOL: set_night_light(true | false)]\n"
+            "[TOOL: scroll_mouse(\"down\" | \"up\", amount)]\n"
+            "[TOOL: double_click(x, y)]\n"
+            "[TOOL: drag_mouse(x1, y1, x2, y2)]\n"
+            "[TOOL: press_hotkey(\"keys\")]\n\n"
             "Always include a concise, natural spoken explanation (1-2 sentences) alongside your tool calls."
         )
+
 
         modified_files: list[str] = []
 
@@ -1102,6 +1339,20 @@ class JarvisCore:
                                     executed_actions["notification"] = self.system_tools.show_desktop_notification(m_notif_args.group(1), m_notif_args.group(2))
                                 else:
                                     executed_actions["notification"] = self.system_tools.show_desktop_notification("J.A.R.V.I.S.", tool_arg.strip().strip('"\''))
+                            elif tool_name == "set_voice_gender":
+                                g_arg = tool_arg.strip().strip('"\'')
+                                executed_actions["voice"] = self.voice_engine.set_gender(g_arg)
+                            elif tool_name == "read_active_browser_tab":
+                                executed_actions["active_tab"] = self.system_tools.read_active_browser_tab()
+                            elif tool_name == "click_element_by_text":
+                                c_txt = tool_arg.strip().strip('"\'')
+                                executed_actions["click_element"] = self.system_tools.click_element_by_text(c_txt)
+                            elif tool_name == "manage_wifi":
+                                w_act = tool_arg.strip().strip('"\'')
+                                executed_actions["wifi"] = self.system_tools.manage_wifi(w_act)
+                            elif tool_name == "manage_bluetooth":
+                                b_act = tool_arg.strip().strip('"\'')
+                                executed_actions["bluetooth"] = self.system_tools.manage_bluetooth(b_act)
                             elif tool_name == "take_screenshot":
                                 executed_actions["screenshot"] = self.system_tools.take_screenshot()
                             elif tool_name == "analyze_vision":
@@ -1142,16 +1393,68 @@ class JarvisCore:
                                 executed_actions["clean_cache"] = self.system_tools.clean_cache()
                             elif tool_name == "get_network_info":
                                 executed_actions["network"] = self.system_tools.get_network_info()
+                            elif tool_name == "get_display_monitors":
+                                executed_actions["monitors"] = self.system_tools.get_display_monitors()
+                            elif tool_name == "move_window_to_monitor":
+                                m_idx = int(tool_arg.strip().strip('"\'') or 1)
+                                executed_actions["move_window"] = self.system_tools.move_window_to_monitor(m_idx)
+                            elif tool_name == "set_power_profile":
+                                p_prof = tool_arg.strip().strip('"\'')
+                                executed_actions["power_profile"] = self.system_tools.set_power_profile(p_prof)
+                            elif tool_name == "get_battery_status":
+                                executed_actions["battery"] = self.system_tools.get_battery_status()
+                            elif tool_name == "set_night_light":
+                                nl_en = "true" in tool_arg.lower() or "1" in tool_arg
+                                executed_actions["night_light"] = self.system_tools.set_night_light(nl_en)
+                            elif tool_name == "scroll_mouse":
+                                m_sc_args = re.match(r"""["']?(\w+)["']?\s*(?:,\s*(\d+))?""", tool_arg.strip())
+                                if m_sc_args:
+                                    s_dir = m_sc_args.group(1) or "down"
+                                    s_amt = int(m_sc_args.group(2) or 5)
+                                    executed_actions["scroll"] = self.system_tools.scroll_mouse(s_dir, s_amt)
+                                else:
+                                    executed_actions["scroll"] = self.system_tools.scroll_mouse("down", 5)
+                            elif tool_name == "double_click":
+                                m_dc = re.match(r"(\d+)\s*,\s*(\d+)", tool_arg.strip())
+                                if m_dc:
+                                    executed_actions["double_click"] = self.system_tools.double_click(int(m_dc.group(1)), int(m_dc.group(2)))
+                            elif tool_name == "drag_mouse":
+                                m_dg = re.match(r"(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", tool_arg.strip())
+                                if m_dg:
+                                    executed_actions["drag"] = self.system_tools.drag_mouse(int(m_dg.group(1)), int(m_dg.group(2)), int(m_dg.group(3)), int(m_dg.group(4)))
+                            elif tool_name == "press_hotkey":
+                                p_h = tool_arg.strip().strip('"\'')
+                                executed_actions["hotkey"] = self.system_tools.press_hotkey(p_h)
                             elif tool_name == "get_system_diagnostics":
                                 executed_actions["diagnostics"] = self.telemetry.get_snapshot().to_dict()
 
-                        return spoken_cleaned or "Executing your requested task, sir.", last_action, executed_actions, modified_files
 
-                    return raw_resp.strip(), "llm_dialogue", None, []
+                    raw_text = raw_resp.strip()
+                    refusal_patterns = [
+                        "i am not a retailer", "not a retailer", "i cannot assist with that",
+                        "i will search the internet for you", "i will search for you",
+                        "i don't have real-time", "i do not have access to real-time",
+                        "baxmaq olmaydi", "internetənə baxmaydik", "i'm sorry, but i can't assist"
+                    ]
+                    if any(rp in raw_text.lower() for rp in refusal_patterns):
+                        s_res = self.system_tools.search_web(user_prompt)
+                        snips = s_res.get("snippets", [])
+                        if snips:
+                            top_info = snips[0]
+                            if len(top_info) > 220:
+                                top_info = top_info[:220] + "..."
+                            spoken = f"According to current web data: {top_info} I have also opened the search results for you, sir." if not is_az else f"İnternetdə ən son məlumatlara əsasən: {top_info} Nəticələri brauzerdə də açdım, cənab."
+                        else:
+                            spoken = f"I have searched the web for '{user_prompt}' and opened the results in your browser, sir." if not is_az else f"'{user_prompt}' üçün internetdə axtarış etdim və nəticələri brauzerdə açdım, cənab."
+                        return spoken, "search_web", {"search": s_res}, []
+
+                    return raw_text, "llm_dialogue", None, []
+
         except Exception:
             pass
 
         # Fallback
         fallback = f"Right away, sir. Executing: '{user_prompt}'." if not is_az else f"Oldu, cənab. '{user_prompt}' sorğusunu icra edirəm."
         return fallback, "fallback", None, []
+
 

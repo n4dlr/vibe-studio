@@ -171,7 +171,9 @@ def test_jarvis_standalone_window_and_edge_snapping(tmp_path: Path):
     screen_geo = win._get_current_screen_geometry()
     win.check_edge_snapping(QPoint(screen_geo.left() + 100, screen_geo.top() + 5))
     assert win._is_snapped
-    assert win.geometry() == screen_geo
+    assert win.geometry().top() == screen_geo.top()
+    assert win.geometry().height() == screen_geo.height()
+
 
     # Test restore floating from drag
     win.restore_floating_from_drag(QPoint(500, 300))

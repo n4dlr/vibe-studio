@@ -61,10 +61,11 @@ if [ ${#MISSING_SYS[@]} -ne 0 ] || [ ! -f "/usr/include/python3"* ]; then
     echo -e "${YELLOW}[!] Installing required packages: ${MISSING_SYS[*]}...${NC}"
     if command -v apt-get &> /dev/null; then
         if [ "$EUID" -eq 0 ]; then
-            apt-get update -y && apt-get install -y wmctrl xdotool ffmpeg libnotify-bin python3-venv python3-pip libasound2-dev || true
+            apt-get update -y && apt-get install -y wmctrl xdotool ffmpeg libnotify-bin python3-venv python3-pip libasound2-dev portaudio19-dev alsa-utils || true
         else
-            sudo apt-get update -y && sudo apt-get install -y wmctrl xdotool ffmpeg libnotify-bin python3-venv python3-pip libasound2-dev || true
+            sudo apt-get update -y && sudo apt-get install -y wmctrl xdotool ffmpeg libnotify-bin python3-venv python3-pip libasound2-dev portaudio19-dev alsa-utils || true
         fi
+
     elif command -v pacman &> /dev/null; then
         if [ "$EUID" -eq 0 ]; then
             pacman -Sy --noconfirm wmctrl xdotool ffmpeg libnotify python-virtualenv alsa-lib || true
@@ -112,8 +113,9 @@ echo ""
 echo -e "[*] Installing Vibe Studio & J.A.RV.I.S dependencies..."
 pip install -e .[all] || {
     echo -e "${YELLOW}[!] Retrying core packages...${NC}"
-    pip install PySide6 httpx requests pytest pytest-anyio fastapi uvicorn websockets cryptography psutil edge-tts
+    pip install PySide6 httpx requests pytest pytest-anyio fastapi uvicorn websockets cryptography psutil edge-tts SpeechRecognition sounddevice
     pip install -e .
+
 }
 echo -e "${GREEN}[OK] Python packages installed successfully.${NC}"
 echo ""
@@ -124,18 +126,92 @@ python3 -m playwright install chromium || true
 echo -e "${GREEN}[OK] Playwright browser driver ready.${NC}"
 echo ""
 
-# 7. Check Ollama AI Engine
-echo -e "[*] Checking local Ollama AI Engine..."
+# 7. Setup Ollama AI Engine & Interactive Model Tier Selector
+echo -e "[*] Setting up local Ollama AI Engine..."
+if ! command -v ollama &> /dev/null; then
+    echo -e "${YELLOW}[*] Ollama not detected. Auto-installing Ollama...${NC}"
+    curl -fsSL https://ollama.com/install.sh | sh || true
+fi
+
 if command -v ollama &> /dev/null; then
-    if curl -s http://127.0.0.1:11434/api/tags &> /dev/null; then
-        echo -e "${GREEN}[OK] Ollama is running and responding on http://127.0.0.1:11434.${NC}"
-    else
-        echo -e "${YELLOW}[!] Ollama is installed. You can launch models with: ollama run qwen2.5:1.5b${NC}"
+    echo -e "${GREEN}[OK] Ollama is installed.${NC}"
+    
+    # Ensure Ollama server daemon is active
+    if ! curl -s http://127.0.0.1:11434/api/tags &> /dev/null; then
+        echo -e "[*] Starting Ollama background server..."
+        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+            sudo -u "$REAL_USER" ollama serve > /dev/null 2>&1 &
+        else
+            ollama serve > /dev/null 2>&1 &
+        fi
+        sleep 3
     fi
+
+    echo ""
+    echo -e "${CYAN}---------------------------------------------------------------------------------------------${NC}"
+    echo -e "${CYAN}             🤖 TOP AGENTIC & CODING AI MODEL ROSTER (OPTIMIZED FOR <= 7B)                   ${NC}"
+    echo -e "${CYAN}---------------------------------------------------------------------------------------------${NC}"
+    echo -e "${YELLOW}⚡ ULTRA-LIGHTWEIGHT & FAST (2GB - 4GB RAM/VRAM):${NC}"
+    echo -e "  ${CYAN}[1]${NC} Qwen 2.5 Coder 1.5B     (~980 MB  | ⚡ 120+ tok/s | Fast Coding & Tool Use)"
+    echo -e "  ${CYAN}[2]${NC} DeepSeek-R1 1.5B        (~1.1 GB  | 🧠 90+ tok/s  | Lightweight Chain-of-Thought)"
+    echo ""
+    echo -e "${YELLOW}⭐ BALANCED SWEETSPOT (4GB - 6GB VRAM) [RECOMMENDED]:${NC}"
+    echo -e "  ${CYAN}[3]${NC} Qwen 2.5 Coder 3B       (~1.9 GB  | ⭐ 65+ tok/s  | Excellent Balance of IQ & Speed)"
+    echo -e "  ${CYAN}[4]${NC} StarCoder2 3B           (~1.8 GB  | 💻 60+ tok/s  | Multi-Language Repo Specialist)"
+    echo -e "  ${CYAN}[5]${NC} Gemma 3 4B              (~3.1 GB  | 🌐 45+ tok/s  | Google Multimodal & Context)"
+    echo ""
+    echo -e "${YELLOW}🏆 TOP-TIER TITANS (6GB - 8GB VRAM / Max IQ <= 7B):${NC}"
+    echo -e "  ${CYAN}[6]${NC} Qwen 2.5 Coder 7B       (~4.7 GB  | 🏆 35+ tok/s  | #1 Coding/Agent Benchmark King)"
+    echo -e "  ${CYAN}[7]${NC} DeepSeek Coder 6.7B     (~3.8 GB  | 🛠️ 35+ tok/s  | Deep Architectural & Bug Hunter)"
+    echo -e "  ${CYAN}[8]${NC} DeepSeek-R1 7B          (~4.7 GB  | 🧠 30+ tok/s  | Advanced Math & Logic Reasoner)"
+    echo -e "  ${CYAN}[9]${NC} CodeLlama 7B            (~3.8 GB  | 🐍 35+ tok/s  | Meta Python & Full-Stack Model)"
+    echo ""
+    echo -e "  ${GREEN}[A]${NC} Download ALL Recommended Models (1, 3, 6)"
+    echo -e "  ${YELLOW}[0]${NC} Skip model download (Configure later)"
+    echo -e "${CYAN}---------------------------------------------------------------------------------------------${NC}"
+    echo -e "Format options: single ('3'), contiguous ('136'), separated ('1 3 6' or '1, 3, 6'), or 'A'"
+    read -rp "Enter choice(s) [Default: 3]: " RAW_CHOICE
+    RAW_CHOICE=${RAW_CHOICE:-3}
+
+    # Normalize input: extract digits or ALL
+    CHOSEN_MODELS=()
+    if [[ "$RAW_CHOICE" =~ [Aa] ]]; then
+        CHOSEN_MODELS=("qwen2.5-coder:1.5b" "qwen2.5-coder:3b" "qwen2.5-coder:7b")
+    elif [[ "$RAW_CHOICE" == "0" ]]; then
+        CHOSEN_MODELS=()
+    else
+        [[ "$RAW_CHOICE" =~ 1 ]] && CHOSEN_MODELS+=("qwen2.5-coder:1.5b")
+        [[ "$RAW_CHOICE" =~ 2 ]] && CHOSEN_MODELS+=("deepseek-r1:1.5b")
+        [[ "$RAW_CHOICE" =~ 3 ]] && CHOSEN_MODELS+=("qwen2.5-coder:3b")
+        [[ "$RAW_CHOICE" =~ 4 ]] && CHOSEN_MODELS+=("starcoder2:3b")
+        [[ "$RAW_CHOICE" =~ 5 ]] && CHOSEN_MODELS+=("gemma3:4b")
+        [[ "$RAW_CHOICE" =~ 6 ]] && CHOSEN_MODELS+=("qwen2.5-coder:7b")
+        [[ "$RAW_CHOICE" =~ 7 ]] && CHOSEN_MODELS+=("deepseek-coder:6.7b")
+        [[ "$RAW_CHOICE" =~ 8 ]] && CHOSEN_MODELS+=("deepseek-r1:7b")
+        [[ "$RAW_CHOICE" =~ 9 ]] && CHOSEN_MODELS+=("codellama:7b")
+    fi
+
+    if [ ${#CHOSEN_MODELS[@]} -eq 0 ] && [[ "$RAW_CHOICE" != "0" ]]; then
+        CHOSEN_MODELS=("qwen2.5-coder:3b")
+    fi
+
+    echo ""
+    for mdl in "${CHOSEN_MODELS[@]}"; do
+        echo -e "[*] Pulling model: ${CYAN}${mdl}${NC}..."
+        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+            sudo -u "$REAL_USER" ollama pull "$mdl" || true
+        else
+            ollama pull "$mdl" || true
+        fi
+        echo -e "${GREEN}[OK] ${mdl} downloaded and ready!${NC}"
+    done
+
 else
-    echo -e "${YELLOW}[!] Ollama not found in PATH. To use local LLMs, install from https://ollama.com${NC}"
+    echo -e "${YELLOW}[!] Could not auto-install Ollama. Please install manually from https://ollama.com${NC}"
 fi
 echo ""
+
+
 
 # 8. Restore permissions to real user
 if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then

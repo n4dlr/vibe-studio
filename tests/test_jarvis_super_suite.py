@@ -54,12 +54,14 @@ def test_youtube_and_spotify_search(tmp_path: Path):
 
     yt = tools.play_youtube("Hans Zimmer Interstellar")
     assert yt["status"] == "success"
-    assert "youtube.com/results" in yt["url"]
-    assert "Interstellar" in yt["url"] or "Hans" in yt["url"]
+    assert "youtube.com" in yt["url"]
+    assert "watch?v=" in yt["url"] or "results" in yt["url"]
+
 
     sp = tools.play_spotify("Eminem Lose Yourself")
     assert sp["status"] == "success"
-    assert "spotify" in sp["url"] or "spotify" in sp.get("message", "").lower()
+    assert "youtube" in sp["url"] or "youtube" in sp.get("message", "").lower()
+
 
 
 def test_global_file_finder(tmp_path: Path):
@@ -123,23 +125,29 @@ def test_jarvis_core_super_suite_intents(tmp_path: Path):
     assert resp_timer.action_taken == "set_timer"
     assert "taymeri quruldu" in resp_timer.spoken_text or "timer set" in resp_timer.spoken_text.lower()
 
-    # 2. YouTube intent
-    resp_yt = jarvis.execute_command("youtube-da Hans Zimmer çal")
-    assert isinstance(resp_yt, JarvisResponse)
-    assert resp_yt.action_taken == "play_youtube"
-    assert "youtube" in resp_yt.spoken_text.lower()
+    # 2. Direct Azerbaijani music query (e.g. inna caliente musiqisini ac)
+    resp_inna = jarvis.execute_command("inna caliente musiqisini ac")
+    assert isinstance(resp_inna, JarvisResponse)
+    assert resp_inna.action_taken == "play_youtube"
+    assert "inna caliente" in resp_inna.spoken_text.lower() or "youtube" in resp_inna.spoken_text.lower()
 
-    # 3. Spotify intent (routes to zero-login YouTube music)
-    resp_sp = jarvis.execute_command("spotify-da eminem oxut")
-    assert isinstance(resp_sp, JarvisResponse)
-    assert resp_sp.action_taken == "play_spotify"
-    assert "youtube" in resp_sp.spoken_text.lower() or "streaming" in resp_sp.spoken_text.lower()
+    # 3. Direct first video auto-play intent (e.g. browserde 1ci mahnini ac)
+    resp_first = jarvis.execute_command("browserde 1ci mahnini ac")
+    assert isinstance(resp_first, JarvisResponse)
+    assert resp_first.action_taken == "play_first_video"
 
-    # 4. Global file search intent
+    # 4. YouTube intent (e.g. open the inna-caliente music in ytb)
+    resp_ytb = jarvis.execute_command("open the inna-caliente music in ytb")
+    assert isinstance(resp_ytb, JarvisResponse)
+    assert resp_ytb.action_taken == "play_youtube"
+    assert "youtube" in resp_ytb.spoken_text.lower() or "inna-caliente" in resp_ytb.spoken_text.lower()
+
+    # 5. Global file search intent
     resp_find = jarvis.execute_command("bütün kompüterdə report tap")
     assert isinstance(resp_find, JarvisResponse)
     assert resp_find.action_taken == "find_files_global"
     assert "fayl" in resp_find.spoken_text.lower() or "files" in resp_find.spoken_text.lower()
+
 
     # 5. Desktop notification intent
     resp_notif = jarvis.execute_command("send notification Task completed successfully")
@@ -181,3 +189,149 @@ def test_jarvis_llm_reasoning_super_suite_tool_execution(tmp_path: Path):
     assert resp_notify[1] == "show_notification"
     assert "notification" in resp_notify[2]
 
+
+def test_jarvis_neural_voice_engine_gender_and_personas(tmp_path: Path):
+    from vibe_studio.jarvis.voice_engine import JarvisVoiceEngine
+
+    engine = JarvisVoiceEngine(cache_dir=tmp_path)
+    # Default is male
+    assert engine.gender == "male"
+    assert "Babek" in engine.VOICE_AZ_MALE
+    assert "Banu" in engine.VOICE_AZ_FEMALE
+
+    # Switch to female
+    info_f = engine.set_gender("female")
+    assert info_f["gender"] == "female"
+    assert info_f["persona"] == "banu"
+    assert "Banu" in info_f["voice"]
+
+    # Toggle back to male
+    info_m = engine.toggle_gender()
+    assert info_m["gender"] == "male"
+    assert info_m["persona"] == "babek"
+
+    # Set specific persona (e.g. friday)
+    info_fri = engine.set_persona("friday")
+    assert info_fri["gender"] == "female"
+    assert "Jenny" in info_fri["voice"]
+
+
+def test_jarvis_advanced_system_tools_wifi_bt_tabs(tmp_path: Path):
+    tools = JarvisSystemTools(tmp_path)
+
+    # 1. Read active browser tab
+    tab_res = tools.read_active_browser_tab()
+    assert tab_res["status"] == "success"
+    assert "title" in tab_res
+
+    # 2. Visual OCR clicker
+    click_res = tools.click_element_by_text("Login")
+    assert click_res["status"] in ("success", "simulated")
+
+    # 3. Wi-Fi control
+    wifi_res = tools.manage_wifi("status")
+    assert wifi_res["status"] in ("success", "simulated")
+
+    # 4. Bluetooth control
+    bt_res = tools.manage_bluetooth("status")
+    assert bt_res["status"] in ("success", "simulated")
+
+
+def test_jarvis_advanced_intents(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+
+    # Voice gender switch
+    r_v = jarvis.execute_command("qadın səsinə keç")
+    assert r_v.action_taken == "set_voice_gender"
+    assert jarvis.voice_engine.gender == "female"
+
+    r_vm = jarvis.execute_command("kişi səsinə keç")
+    assert r_vm.action_taken == "set_voice_gender"
+    assert jarvis.voice_engine.gender == "male"
+
+    # Active browser tab reading
+    r_tab = jarvis.execute_command("bu səhifəni oxu")
+    assert r_tab.action_taken == "read_active_browser_tab"
+
+    # Wi-Fi command
+    r_wf = jarvis.execute_command("wifi axtar")
+    assert r_wf.action_taken == "manage_wifi"
+
+    # Bluetooth command
+    r_bt = jarvis.execute_command("bluetooth söndür")
+    assert r_bt.action_taken == "manage_bluetooth"
+
+    # Power profile
+    r_perf = jarvis.execute_command("performans rejimi")
+    assert r_perf.action_taken == "set_power_profile"
+
+    r_eco = jarvis.execute_command("qənaət rejimi")
+    assert r_eco.action_taken == "set_power_profile"
+
+    r_bal = jarvis.execute_command("balans rejimi")
+    assert r_bal.action_taken == "set_power_profile"
+
+    # Battery status
+    r_bat = jarvis.execute_command("batareya")
+    assert r_bat.action_taken == "get_battery_status"
+
+    # Night light
+    r_nl_on = jarvis.execute_command("gecə işığını yandır")
+    assert r_nl_on.action_taken == "set_night_light"
+
+    r_nl_off = jarvis.execute_command("gecə işığını söndür")
+    assert r_nl_off.action_taken == "set_night_light"
+
+    # Scroll
+    r_scr_d = jarvis.execute_command("aşağı sürüşdür")
+    assert r_scr_d.action_taken == "scroll_mouse"
+
+    r_scr_u = jarvis.execute_command("yuxarı sürüşdür")
+    assert r_scr_u.action_taken == "scroll_mouse"
+
+    # Monitor listing
+    r_mon = jarvis.execute_command("monitorları göstər")
+    assert r_mon.action_taken == "get_display_monitors"
+
+
+def test_jarvis_system_tools_new_features(tmp_path: Path):
+    """Tests for power, battery, multi-monitor, night light, and mouse automation tools."""
+    tools = JarvisSystemTools(tmp_path)
+
+    # Battery status always returns something
+    bat = tools.get_battery_status()
+    assert bat["status"] in ("success", "simulated")
+    assert "percent" in bat
+
+    # Power profile switch (simulated if no powerprofilesctl)
+    for profile in ("performance", "balanced", "power-saver"):
+        p_res = tools.set_power_profile(profile)
+        assert p_res["status"] in ("success", "simulated", "error")
+
+    # Night light toggle
+    nl_on = tools.set_night_light(True)
+    assert nl_on["status"] in ("success", "simulated")
+    nl_off = tools.set_night_light(False)
+    assert nl_off["status"] in ("success", "simulated")
+
+    # Monitor detection
+    mon = tools.get_display_monitors()
+    assert mon["status"] in ("success", "simulated")
+    assert "monitors" in mon
+    assert isinstance(mon["monitors"], list)
+
+    # Scroll
+    s_res = tools.scroll_mouse("down", 3)
+    assert s_res["status"] in ("success", "simulated")
+
+    # Double-click (simulated without display)
+    dc_res = tools.double_click(100, 100)
+    assert dc_res["status"] in ("success", "simulated")
+
+    # Drag
+    drag_res = tools.drag_mouse(0, 0, 100, 100)
+    assert drag_res["status"] in ("success", "simulated")
+
+    # Hotkey
+    hk_res = tools.press_hotkey("ctrl+c")
+    assert hk_res["status"] in ("success", "simulated")

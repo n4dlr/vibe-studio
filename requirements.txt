@@ -1,8 +1,35 @@
-PySide6>=6.8.0
-requests>=2.32.0
-httpx>=0.27.0
-pytest>=8.0.0
+# ===============================================================================
+# Vibe Studio & J.A.R.V.I.S Autonomous OS — Production Dependencies
+# ===============================================================================
 
-# Optional vector RAG & Graph RAG
+# --- Core UI, System Telemetry & Automation ---
+PySide6>=6.8.0
+psutil>=5.9.0
+httpx>=0.27.0
+requests>=2.32.0
+markdownify>=0.12.0
+
+# --- J.A.R.V.I.S Neural Voice & Speech Recognition ---
+edge-tts>=6.1.0
+SpeechRecognition>=3.10.0
+sounddevice>=0.4.6
+playwright>=1.44.0
+cryptography>=42.0.0
+networkx>=3.3
+
+
+# --- Web Server, REST API & Distributed Agent Swarm ---
+fastapi>=0.111.0
+uvicorn>=0.30.0
+websockets>=12.0
+
+# --- Testing & Quality Assurance ---
+pytest>=8.0.0
+pytest-anyio>=0.0.0
+
+# --- Optional AI Extras (Offline Whisper & Semantic Vector RAG) ---
+# faster-whisper>=1.0.0
+# sounddevice>=0.4.6
 # sentence-transformers>=2.2.0
-# networkx>=3.3
+# python-lsp-server>=1.10.0
+# opencv-python>=4.8.0

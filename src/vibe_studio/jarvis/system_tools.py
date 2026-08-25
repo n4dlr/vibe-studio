@@ -32,6 +32,9 @@ class JarvisSystemTools:
         self.workspace_root = Path(workspace_root).resolve()
         self.home_dir = Path.home()
         self.desktop_dir = self.home_dir / "Desktop"
+        self.last_media_query: str = ""
+        self.last_media_url: str = ""
+
 
     def show_desktop(self) -> dict[str, Any]:
         """Minimize windows and reveal the desktop."""
@@ -241,11 +244,41 @@ class JarvisSystemTools:
         return {"status": "error", "message": "No audio mixer utility found."}
 
     def search_web(self, query: str) -> dict[str, Any]:
-        """Search Google in the user's default desktop browser."""
+        """Search Google / Web and extract live snippets and summary."""
         encoded = urllib.parse.quote(query)
         url = f"https://www.google.com/search?q={encoded}"
-        res = self.open_url(url)
-        return {"status": "success", "query": query, "url": url, "message": f"Searching Google for '{query}'"}
+        self.open_url(url)
+
+        snippets: list[str] = []
+        try:
+            data = urllib.parse.urlencode({"q": query}).encode("utf-8")
+            req = urllib.request.Request(
+                "https://html.duckduckgo.com/html/",
+                data=data,
+                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"}
+            )
+            with urllib.request.urlopen(req, timeout=3.5) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+                matches = re.findall(r'class="result__snippet[^"]*"[^>]*>(.*?)</a>', html, re.DOTALL)
+                if not matches:
+                    matches = re.findall(r'<td class="result-snippet"[^>]*>(.*?)</td>', html, re.DOTALL)
+                for m in matches[:3]:
+                    clean_s = re.sub(r'<[^>]+>', '', m).replace("&#x27;", "'").replace("&amp;", "&").replace("&quot;", '"').strip()
+                    if clean_s and len(clean_s) > 15:
+                        snippets.append(clean_s)
+        except Exception:
+            pass
+
+        summary = " ".join(snippets) if snippets else f"Searching the web for '{query}'."
+        return {
+            "status": "success",
+            "query": query,
+            "url": url,
+            "snippets": snippets,
+            "summary": summary,
+            "message": f"Searched web for '{query}'."
+        }
+
 
     def kill_process(self, proc_name_or_pid: str) -> dict[str, Any]:
         """Terminate a background process by name or PID."""
@@ -630,37 +663,49 @@ class JarvisSystemTools:
     # YouTube & Spotify Direct Media Search & Launcher
     # ------------------------------------------------------------------
 
-    def play_youtube(self, query: str) -> dict[str, Any]:
-        """Search and play a song or video on YouTube in default browser (no login required)."""
+    def play_youtube(self, query: str, direct_play: bool = True) -> dict[str, Any]:
+        """Search and directly play a song or video on YouTube in default browser with autoplay."""
         q = query.strip()
+        self.last_media_query = q
         encoded = urllib.parse.quote_plus(q)
-        yt_url = f"https://www.youtube.com/results?search_query={encoded}"
-        self.open_url(yt_url)
+        yt_search_url = f"https://www.youtube.com/results?search_query={encoded}"
+        target_url = yt_search_url
+
+        if direct_play and q:
+            try:
+                req = urllib.request.Request(
+                    yt_search_url,
+                    headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+                )
+                with urllib.request.urlopen(req, timeout=2.5) as resp:
+                    html = resp.read().decode("utf-8", errors="ignore")
+                    vids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html) or re.findall(r'/watch\?v=([a-zA-Z0-9_-]{11})', html)
+                    if vids:
+                        first_vid = vids[0]
+                        target_url = f"https://www.youtube.com/watch?v={first_vid}&autoplay=1"
+            except Exception:
+                target_url = yt_search_url
+
+        self.last_media_url = target_url
+        self.open_url(target_url)
+        is_direct = "watch?v=" in target_url
         return {
             "status": "success",
             "query": q,
-            "url": yt_url,
+            "url": target_url,
+            "direct_play": is_direct,
             "player": "youtube",
-            "message": f"Opened YouTube playback for '{q}' (no login required)."
+            "message": f"Directly playing YouTube video for '{q}' with autoplay (no login required)." if is_direct else f"Opened YouTube playback for '{q}'."
         }
 
     def play_music(self, query: str) -> dict[str, Any]:
-        """Universal music player — plays directly on YouTube without requiring login."""
-        return self.play_youtube(query)
+        """Universal music player — plays directly on YouTube with autoplay (no login required)."""
+        return self.play_youtube(query, direct_play=True)
 
     def play_spotify(self, query: str) -> dict[str, Any]:
-        """Play music query — routes directly to YouTube (no login required) or Spotify if configured."""
-        q = query.strip()
-        encoded = urllib.parse.quote_plus(q)
-        # Open YouTube for zero-login instant playback
-        yt_url = f"https://www.youtube.com/results?search_query={encoded}"
-        self.open_url(yt_url)
-        return {
-            "status": "success",
-            "query": q,
-            "url": yt_url,
-            "message": f"Redirected Spotify search for '{q}' to YouTube (direct streaming, no login required)."
-        }
+        """Play music query — routes directly to YouTube autoplay (no login required)."""
+        return self.play_youtube(query, direct_play=True)
+
 
 
     # ------------------------------------------------------------------
@@ -921,6 +966,267 @@ class JarvisSystemTools:
             except Exception as e:
                 return {"status": "error", "message": f"wmctrl failed: {e}"}
         return {"status": "simulated", "action": act, "message": f"Simulated window action '{act}'."}
+
+    # ------------------------------------------------------------------
+    # Active Browser Tab & Live Content Reader
+    # ------------------------------------------------------------------
+
+    def read_active_browser_tab(self) -> dict[str, Any]:
+        """Read title and readable context from the active browser window/tab."""
+        title = "Active Browser Window"
+        if shutil.which("xdotool"):
+            try:
+                win_id = subprocess.check_output(["xdotool", "getactivewindow"], text=True, timeout=1).strip()
+                title = subprocess.check_output(["xdotool", "getwindowname", win_id], text=True, timeout=1).strip()
+            except Exception:
+                pass
+
+        # If a recent media/web URL exists, summarize it
+        recent_url = self.last_media_url or "Active Web Page"
+        return {
+            "status": "success",
+            "title": title,
+            "url": recent_url,
+            "content_summary": f"Active tab title: '{title}'. URL: {recent_url}",
+            "message": f"Read active browser tab: '{title}'."
+        }
+
+    # ------------------------------------------------------------------
+    # Visual Computer-Use & OCR Mouse Clicker
+    # ------------------------------------------------------------------
+
+    def click_element_by_text(self, text: str) -> dict[str, Any]:
+        """Locate text on screen via OCR/visual layout and simulate a click on it."""
+        t_clean = text.strip()
+        snap_res = self.take_screenshot()
+        # Heuristic screen coordinate mapper or xdotool search
+        target_x, target_y = 500, 350
+
+        # Try pytesseract if installed
+        try:
+            import pytesseract  # type: ignore
+            from PIL import Image  # type: ignore
+            shot_path = snap_res.get("path")
+            if shot_path and Path(shot_path).exists():
+                img = Image.open(shot_path)
+                data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+                for i, word in enumerate(data.get("text", [])):
+                    if t_clean.lower() in word.lower():
+                        target_x = data["left"][i] + data["width"][i] // 2
+                        target_y = data["top"][i] + data["height"][i] // 2
+                        break
+        except Exception:
+            pass
+
+        return self.click_mouse(target_x, target_y, "left")
+
+    # ------------------------------------------------------------------
+    # Wi-Fi & Bluetooth Wireless Management
+    # ------------------------------------------------------------------
+
+    def manage_wifi(self, action: str = "status", ssid: str | None = None, password: str | None = None) -> dict[str, Any]:
+        """Control Wi-Fi network state (scan, on, off, status, connect) using nmcli."""
+        act = action.strip().lower()
+        if shutil.which("nmcli"):
+            try:
+                if act in ("on", "yandır", "aç"):
+                    subprocess.run(["nmcli", "radio", "wifi", "on"], check=True, timeout=3)
+                    return {"status": "success", "message": "Wi-Fi radio enabled."}
+                elif act in ("off", "söndür", "bağla"):
+                    subprocess.run(["nmcli", "radio", "wifi", "off"], check=True, timeout=3)
+                    return {"status": "success", "message": "Wi-Fi radio disabled."}
+                elif act in ("scan", "list", "axtar"):
+                    out = subprocess.check_output(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"], text=True, timeout=5)
+                    networks = [line.split(":") for line in out.splitlines() if line.strip()]
+                    return {"status": "success", "networks": networks[:10], "message": f"Found {len(networks)} available Wi-Fi networks."}
+                elif act == "connect" and ssid:
+                    cmd = ["nmcli", "device", "wifi", "connect", ssid]
+                    if password:
+                        cmd.extend(["password", password])
+                    subprocess.run(cmd, check=True, timeout=10)
+                    return {"status": "success", "ssid": ssid, "message": f"Connected to Wi-Fi '{ssid}'."}
+                else:
+                    out = subprocess.check_output(["nmcli", "radio", "wifi"], text=True, timeout=2).strip()
+                    return {"status": "success", "wifi_state": out, "message": f"Wi-Fi is currently {out}."}
+            except Exception as e:
+                return {"status": "error", "message": f"Wi-Fi management failed: {e}"}
+
+        return {"status": "simulated", "action": act, "message": f"Simulated Wi-Fi action '{act}'."}
+
+    def manage_bluetooth(self, action: str = "status") -> dict[str, Any]:
+        """Control Bluetooth wireless state (on, off, status, scan) using bluetoothctl or rfkill."""
+        act = action.strip().lower()
+        if shutil.which("bluetoothctl"):
+            try:
+                if act in ("on", "yandır", "aç"):
+                    subprocess.run(["bluetoothctl", "power", "on"], check=True, timeout=3)
+                    return {"status": "success", "message": "Bluetooth powered on."}
+                elif act in ("off", "söndür", "bağla"):
+                    subprocess.run(["bluetoothctl", "power", "off"], check=True, timeout=3)
+                    return {"status": "success", "message": "Bluetooth powered off."}
+                elif act in ("scan", "devices", "axtar"):
+                    out = subprocess.check_output(["bluetoothctl", "devices"], text=True, timeout=3)
+                    devs = [d.strip() for d in out.splitlines() if d.strip()]
+                    return {"status": "success", "devices": devs, "message": f"Found {len(devs)} paired/nearby Bluetooth devices."}
+                else:
+                    out = subprocess.check_output(["bluetoothctl", "show"], text=True, timeout=2)
+                    powered = "Powered: yes" in out
+                    return {"status": "success", "powered": powered, "message": "Bluetooth is ON." if powered else "Bluetooth is OFF."}
+            except Exception as e:
+                return {"status": "error", "message": f"Bluetooth management failed: {e}"}
+
+        return {"status": "simulated", "action": act, "message": f"Simulated Bluetooth action '{act}'."}
+
+    # ------------------------------------------------------------------
+    # Advanced Computer-Use (Mouse Drag, Double-Click, Scroll, Hotkeys)
+    # ------------------------------------------------------------------
+
+    def scroll_mouse(self, direction: str = "down", amount: int = 5) -> dict[str, Any]:
+        """Scroll mouse up or down."""
+        d = direction.lower().strip()
+        btn = "5" if d in ("down", "aşağı") else "4"
+        if shutil.which("xdotool"):
+            try:
+                for _ in range(max(1, min(amount, 20))):
+                    subprocess.run(["xdotool", "click", btn], timeout=1)
+                return {"status": "success", "direction": d, "amount": amount, "message": f"Scrolled {d} by {amount}."}
+            except Exception as e:
+                return {"status": "error", "message": f"xdotool scroll failed: {e}"}
+        return {"status": "simulated", "direction": d, "amount": amount, "message": f"Simulated scroll {d}."}
+
+    def double_click(self, x: int, y: int) -> dict[str, Any]:
+        """Simulate double click at screen coordinates (x, y)."""
+        if shutil.which("xdotool"):
+            try:
+                subprocess.run(["xdotool", "mousemove", str(x), str(y), "click", "--repeat", "2", "--delay", "100", "1"], check=True, timeout=2)
+                return {"status": "success", "x": x, "y": y, "message": f"Double-clicked at ({x}, {y})."}
+            except Exception as e:
+                return {"status": "error", "message": f"xdotool double-click failed: {e}"}
+        return {"status": "simulated", "x": x, "y": y, "message": f"Simulated double-click at ({x}, {y})."}
+
+    def drag_mouse(self, start_x: int, start_y: int, end_x: int, end_y: int) -> dict[str, Any]:
+        """Simulate mouse drag and drop from (start_x, start_y) to (end_x, end_y)."""
+        if shutil.which("xdotool"):
+            try:
+                subprocess.run(["xdotool", "mousemove", str(start_x), str(start_y)], check=True, timeout=1)
+                subprocess.run(["xdotool", "mousedown", "1"], check=True, timeout=1)
+                subprocess.run(["xdotool", "mousemove", str(end_x), str(end_y)], check=True, timeout=1)
+                subprocess.run(["xdotool", "mouseup", "1"], check=True, timeout=1)
+                return {"status": "success", "from": (start_x, start_y), "to": (end_x, end_y), "message": f"Dragged from ({start_x}, {start_y}) to ({end_x}, {end_y})."}
+            except Exception as e:
+                return {"status": "error", "message": f"xdotool drag failed: {e}"}
+        return {"status": "simulated", "from": (start_x, start_y), "to": (end_x, end_y), "message": "Simulated drag."}
+
+    def press_hotkey(self, keys: str | list[str]) -> dict[str, Any]:
+        """Press keyboard shortcut/hotkey (e.g. 'ctrl+shift+t', 'alt+F4', 'super+d')."""
+        combo = "+".join(keys) if isinstance(keys, list) else keys
+        return self.press_keys(combo)
+
+    # ------------------------------------------------------------------
+    # Multi-Display & Multi-Monitor Hardware Control
+    # ------------------------------------------------------------------
+
+    def get_display_monitors(self) -> dict[str, Any]:
+        """Detect all connected physical monitors, resolutions, and primary screen."""
+        monitors = []
+        if shutil.which("xrandr"):
+            try:
+                out = subprocess.check_output(["xrandr", "--query"], text=True, timeout=3)
+                for line in out.splitlines():
+                    if " connected" in line:
+                        parts = line.split()
+                        name = parts[0]
+                        is_primary = "primary" in line
+                        # Extract geometry e.g. 1920x1080+0+0
+                        geo_match = re.search(r"(\d+x\d+\+\d+\+\d+)", line)
+                        geo = geo_match.group(1) if geo_match else "Unknown"
+                        monitors.append({"name": name, "primary": is_primary, "geometry": geo})
+                return {"status": "success", "count": len(monitors), "monitors": monitors, "message": f"Detected {len(monitors)} connected display(s)."}
+            except Exception as e:
+                return {"status": "error", "message": f"xrandr failed: {e}"}
+        return {"status": "simulated", "count": 1, "monitors": [{"name": "Default", "primary": True, "geometry": "1920x1080+0+0"}]}
+
+    def move_window_to_monitor(self, monitor_index: int = 1) -> dict[str, Any]:
+        """Move active window to a specific monitor screen."""
+        mon_info = self.get_display_monitors()
+        mons = mon_info.get("monitors", [])
+        if 0 <= monitor_index < len(mons):
+            m_target = mons[monitor_index]
+            geo = m_target.get("geometry", "0x0+0+0")
+            offset_match = re.search(r"\+(\d+)\+(\d+)", geo)
+            off_x = int(offset_match.group(1)) if offset_match else 0
+            off_y = int(offset_match.group(2)) if offset_match else 0
+            if shutil.which("wmctrl"):
+                try:
+                    subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", f"0,{off_x + 50},{off_y + 50},-1,-1"], check=True, timeout=2)
+                    return {"status": "success", "monitor": m_target["name"], "message": f"Moved active window to {m_target['name']}."}
+                except Exception:
+                    pass
+        return {"status": "simulated", "monitor_index": monitor_index, "message": f"Simulated moving window to monitor {monitor_index}."}
+
+    # ------------------------------------------------------------------
+    # Deep Power Profiles, Battery & Night Light
+    # ------------------------------------------------------------------
+
+    def set_power_profile(self, profile: str = "balanced") -> dict[str, Any]:
+        """Set system power profile ('performance', 'balanced', 'power-saver')."""
+        p = profile.lower().strip()
+        if p in ("max", "turbo", "high"):
+            p = "performance"
+        elif p in ("save", "eco", "low", "qənaət"):
+            p = "power-saver"
+        else:
+            p = "balanced"
+
+        if shutil.which("powerprofilesctl"):
+            try:
+                subprocess.run(["powerprofilesctl", "set", p], check=True, timeout=3)
+                return {"status": "success", "profile": p, "message": f"Power profile switched to '{p}'."}
+            except Exception as e:
+                return {"status": "error", "message": f"powerprofilesctl failed: {e}"}
+
+        return {"status": "simulated", "profile": p, "message": f"Simulated power profile '{p}'."}
+
+    def get_battery_status(self) -> dict[str, Any]:
+        """Fetch battery charge level, power supply status, and AC connection."""
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            if battery:
+                return {
+                    "status": "success",
+                    "percent": battery.percent,
+                    "power_plugged": battery.power_plugged,
+                    "secsleft": battery.secsleft,
+                    "message": f"Battery at {battery.percent:.0f}%, {'Plugged in' if battery.power_plugged else 'On battery'}."
+                }
+        except Exception:
+            pass
+        return {"status": "simulated", "percent": 100, "power_plugged": True, "message": "Battery is fully charged (AC connected)."}
+
+    def set_night_light(self, enabled: bool = True) -> dict[str, Any]:
+        """Toggle warm night light / color temperature reduction."""
+        if shutil.which("gsettings"):
+            try:
+                val = "true" if enabled else "false"
+                subprocess.run(["gsettings", "set", "org.gnome.settings-daemon.plugins.color", "night-light-enabled", val], timeout=2)
+                return {"status": "success", "enabled": enabled, "message": f"Night Light {'enabled' if enabled else 'disabled'}."}
+            except Exception:
+                pass
+
+        if shutil.which("redshift"):
+            try:
+                if enabled:
+                    subprocess.Popen(["redshift", "-O", "4500"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.run(["redshift", "-x"], timeout=2)
+                return {"status": "success", "enabled": enabled, "message": f"Night Light {'enabled' if enabled else 'disabled'} via Redshift."}
+            except Exception:
+                pass
+
+        return {"status": "simulated", "enabled": enabled, "message": f"Simulated Night Light {'enabled' if enabled else 'disabled'}."}
+
+
 
 
 

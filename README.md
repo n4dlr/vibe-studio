@@ -3,11 +3,11 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PySide6](https://img.shields.io/badge/GUI-PySide6-green.svg)](https://wiki.qt.io/Qt_for_Python)
 [![Playwright](https://img.shields.io/badge/Browser-Playwright-orange.svg)](https://playwright.dev/python/)
-[![Tests Passing](https://img.shields.io/badge/Tests-614%20passed-success.svg)](#-running-tests)
+[![Tests Passing](https://img.shields.io/badge/Tests-628%20passed-success.svg)](#-running-tests)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Vibe Studio** is a next-generation AI-native desktop IDE that unifies:
-1. **🤖 J.A.R.V.I.S Autonomous Desktop & Voice OS** (Arc Reactor HUD, Windows Aero edge snapping, bilingual Azerbaijani/English neural voice, full agentic coding, timer/scheduler daemon, Spotify/YouTube search, global file finder, desktop notifications, vision analysis, and hardware telemetry).
+1. **🤖 J.A.R.V.I.S Autonomous Desktop & Voice OS** (Arc Reactor HUD, Windows Aero edge snapping, bilingual Azerbaijani/English neural voice, high-speed 0.7s Speech-to-Text, multi-monitor display management, power profile control, night light, timer/scheduler daemon, YouTube direct autoplay scraper, global file finder, desktop notifications, vision analysis, and hardware telemetry).
 2. **The Autonomous Execution Power of Claude Agent & Devin** (Zero-failure AST guard, smart fuzzy patcher, MoA sandboxing, specialist multi-agent swarm).
 3. **The Knowledge & Physics Code Graph of Obsidian** (Interactive 2D force-directed dependency graph, true iterative PageRank, multi-language AST for Python/JS/TS/Go/Rust, bidirectional `[[WikiLinks]]`, infinite `.canvas` whiteboard).
 4. **The Visual Automation & Pipeline Power of n8n** (DAG node-based workflows, AST-validated safe script sandbox, CommandSafety, Playwright web actions, SuperAgent auto-repair).
@@ -22,7 +22,7 @@ Sadəcə **`setup-windows.bat`** faylını iki dəfə klikləyin və ya CMD/Powe
 ```cmd
 setup-windows.bat
 ```
-*(Avtomatik olaraq Python mühitini, bütün asılılıqları, Chromium drayverini quraşdırır və J.A.R.V.I.S-i açır).*
+*(Avtomatik olaraq Python mühitini, səs tanıma və nitq paketlərini (`SpeechRecognition`, `sounddevice`, `edge-tts`), bütün asılılıqları, Chromium drayverini quraşdırır və J.A.R.V.I.S-i açır).*
 
 ### 🐧 Linux Üçün:
 Terminalda aşağıdakı əmri icra edin:
@@ -31,7 +31,7 @@ Terminalda aşağıdakı əmri icra edin:
 # və ya
 ./setup_linus.sh
 ```
-*(Sistem paketlərini, `wmctrl`, `xdotool`, `ffmpeg`, virtual mühiti və J.A.R.V.I.S-i tam avtomatlaşdırılmış şəkildə hazırlayır).*
+*(Sistem paketlərini, `wmctrl`, `xdotool`, `ffmpeg`, `arecord`, `portaudio`, virtual mühiti və J.A.R.V.I.S-i tam avtomatlaşdırılmış şəkildə hazırlayır).*
 
 ---
 
@@ -62,7 +62,6 @@ vibe-studio gui
 vibe-studio server --port 8000
 ```
 
-
 ---
 
 ## 🌟 The 5 Core Powerhouses of Vibe Studio
@@ -74,10 +73,10 @@ vibe-studio server --port 8000
 │       J.A.R.V.I.S COCKPIT     │       OBSIDIAN SYSTEM         │         N8N ENGINE      │
 │  - Holographic Arc Reactor    │  - Interactive Physics Graph  │  - Node-Based Pipelines │
 │  - Windows Aero Edge Snapping │  - True Iterative PageRank    │  - AST Script Sandbox   │
-│  - Bilingual Voice (AZ / EN)  │  - Multi-Language AST Graph   │  - CommandSafety Runner │
-│  - Timers, Alarms & Scheduler │  - Bidirectional WikiLinks    │  - Live Variable State  │
-│  - Spotify / YouTube Search   │  - Markdown Whiteboard Canvas │  - Specialist Swarm     │
-│  - Global Disk File Finder    │  - ADR & Code Architecture    │  - Visual Node Studio   │
+│  - Ultra-Fast STT (0.7s)      │  - Multi-Language AST Graph   │  - CommandSafety Runner │
+│  - Neural Voices (Banu/Babək) │  - Bidirectional WikiLinks    │  - Live Variable State  │
+│  - Multi-Monitor & Power Mode │  - Markdown Whiteboard Canvas │  - Specialist Swarm     │
+│  - Direct YouTube Autoplay    │  - ADR & Code Architecture    │  - Visual Node Studio   │
 └───────────────────────────────┴───────────────────────────────┴─────────────────────────┘
 ```
 
@@ -91,33 +90,48 @@ J.A.R.V.I.S istifadəçinin bütün kompüterini və proqramlaşdırma prosesini
 
 | Kateqoriya | Nümunə Əmrlər | Nəticə |
 |---|---|---|
-| **⏰ Taymer və Xatırlatmalar** | `10 dəqiqə sonra çayı xatırlat` / `set timer for 5 minutes` | Arxa fonda taymer qurur, vaxt tamam olduqda səsli və bildirişlə xəbər verir |
+| **🎤 İkidilli Səs Tanıma (STT)** | Mikrofona basıb danışın | 0.7s ərzində Azərbaycan və İngilis dilində səsi dəqiq mətnə çevirir |
+| **🔊 Təbii Qız/Kişi Səsi (TTS)** | `qadın səsinə keç` / `kişi səsinə keç` | `az-AZ-BanuNeural` və `az-AZ-BabekNeural` HD neyron səslərinə keçid edir |
+| **👂 Daimi Wake-Word** | `"Hey Jarvis"`, `"Salam Jarvis"`, `"Friday"` | Düyməsiz, arxa fonda daimi dinləyir və oyanır |
+| **🎵 YouTube Birbaşa Mahnı** | `inna caliente musiqisini ac` / `play first one` | Birbaşa video ID-sini tapıb mahnını ilk saniyədən oxudur (`autoplay=1`) |
+| **🖥️ Çoxlu Monitor İdarəsi** | `monitorları göstər` / `pəncərəni 2-ci monitora keçir` | Bütün qoşulmuş ekranları aşkar edir və pəncərələri daşıyır |
+| **⚡ Performans və Güc Rejimi** | `performans rejimi` / `qənaət rejimi` / `balans rejimi` | CPU və sistem güc profilini (`performance`, `power-saver`, `balanced`) tənzimləyir |
+| **🔋 Batareya Telemetriyası** | `batareya vəziyyəti` / `zaryadka neçə faizdir` | Batareya faizini və AC cərəyan vəziyyətini bildirir |
+| **🌙 Gecə İşığı (Night Light)** | `gecə işığını yandır` / `gecə işığını söndür` | Gözü qoruyan isti rəng temperaturu filtrini aktiv/deaktiv edir |
+| **🖱️ Siçan & Sürüşdürmə** | `aşağı sürüşdür` / `yuxarı sürüşdür` / `scroll down` | Siçanın təkərini yuxarı/aşağı sürüşdürür |
+| **🌐 Aktiv Tabı Oxuma** | `bu səhifəni oxu` / `read active tab` | Açıq olan brauzer səhifəsinin başlığını və kontekstini oxuyur |
+| **🎯 OCR Vizual Klikləyici** | `Daxil ol düyməsini bas` / `click Login button` | Ekrandakı mətni OCR ilə tapıb siçanla klikləyir |
+| **📶 Wi-Fi və Bluetooth** | `wifi axtar`, `wifi yandır`, `bluetooth söndür` | Simsiz şəbəkələri skan edir və idarə edir |
+| **⏰ Taymer və Xatırlatmalar** | `10 dəqiqə sonra çayı xatırlat` / `set timer for 5 minutes` | Asinxron fonda taymer qurur, vaxt tamam olduqda səsli və bildirişlə xəbər verir |
 | **🔔 Zəngli Saat (Alarm)** | `saat 15:30-da zəng qur` / `set alarm for 09:00` | Təyin olunmuş vaxtda zəng vurur |
-| **🎵 YouTube Musiqi/Video** | `youtube-da Hans Zimmer çal` / `play interstellar on youtube` | YouTube-da birbaşa mahnı/videonu axtarır və oxudur |
-| **🎧 Spotify Axtarış** | `spotify-da eminem oxut` / `play eminem on spotify` | Spotify tətbiqində və ya Web playerdə axtarır |
-| **🔍 Bütün Diskdə Fayl Axtarışı** | `bütün kompüterdə report.pdf tap` / `find all pdf files` | Home, Downloads, Documents və diski axtarıb faylları tapır |
-| **📨 Stolüstü Bildirişlər** | `bildiriş göndər İş tamamlandı` / `send notification Hello` | OS masaüstü pop-up bildiriş kartı (`notify-send` / Toast) çıxarır |
-| **👁️ Ekran və Vizual Analiz** | `ekranı analiz et` / `what is on my screen` | Ekranın screenshot-unu çəkib vizual olaraq analiz edir |
+| **🔍 Bütün Diskdə Fayl Axtarışı** | `bütün kompüterdə report.pdf tap` / `find all pdf files` | Bütün diski axtarıb faylları tapır |
+| **📨 Stolüstü Bildirişlər** | `bildiriş göndər İş tamamlandı` / `send notification Hello` | OS masaüstü pop-up bildiriş kartı çıxarır |
+| **👁️ Ekran və Vizual Analiz** | `ekranı analiz et` / `what is on my screen` | Ekranın şəklini çəkib vizual olaraq analiz edir |
 | **📷 Veb-Kamera Çəkilişi** | `veb-kamera ilə şəkil çək` / `take photo with webcam` | Kameradan canlı kadr götürür |
 | **📦 Çoxplatformalı Paket Meneceri** | `install htop`, `git yüklə`, `pip install fastapi` | Linux (apt/dnf/pacman), Windows (winget/choco), Mac (brew) ilə avtomatik quraşdırır |
 | **🧠 Real Hardware Telemetriyası** | `how many ram i have?`, `ram nə qədərdir?`, `what is my cpu` | Kernel səviyyəsində dəqiq RAM, CPU, GPU, Disk vəziyyətini oxuyur |
 | **🔒 Cihaz Təhlükəsizliyi** | `cihazı kilidlə` / `lock screen` | Linux/Windows sessiyasını dərhal kilidləyir |
-| **📞 WhatsApp Zəngi** | `whatsapdan tuncayi ara` / `call tuncay on whatsapp` | Birbaşa WhatsApp-da zəng pəncərəsini açır |
-| **💬 WhatsApp Mesajı** | `whatsapdan tuncaya yaz salam necesen` | Mesajı hazırlayıb WhatsApp-da açır |
-| **✈️ Telegram Çatı** | `telegramdan tuncaya yaz salam` | Telegram-da birbaşa çat açır |
-| **📇 Kontakt Kitabçası** | `save contact tuncay +994501234567` | Kontaktı `~/.jarvis_contacts.json` daxilində yadda saxlayır |
 | **🪟 Pəncərə və Klaviatura** | `tam ekran et`, `pəncərəni kiçilt`, `pəncərəni bağla` | Pəncərələri böyüdür/kiçildir və klaviatura əmrlərini simulyasiya edir |
 | **☀️ Canlı Hava** | `hava necədir`, `Bakıda hava` | Real-vaxt hava temperaturunu deyir |
 | **💡 Ekran Parlaqlığı** | `ekran parlaqlığını 80 faiz et`, `set brightness to 70` | Ekran parlaqlığını dərhal tənzimləyir |
-| **🚀 İnternet Sürət Testi** | `open browser and test internet speed test on fast.com` | Fast.com-u açır və ping-i yoxlayır |
+| **🚀 İnternet Sürət Testi** | `open browser and test internet speed test on fast.com` | Fast.com-u açır və internet sürətini yoxlayır |
 | **💻 Ağıllı Dil Şablonları & Kodlama** | `create simple nodejs file in desktop`, `create python file` | Düzgün fayl adı (`app.js`, `main.py`) və işlək kodla masaüstündə layihə yaradır |
 
-### 🪟 Windows Aero Edge Snapping:
-- J.A.R.V.I.S müstəqil detached pəncərədir (`JarvisStandaloneWindow`).
-- Pəncərəni **ekranın soluna çəkdikdə** 50% sol yarıya yapışır (`◧`).
-- **Sağına çəkdikdə** 50% sağ yarıya yapışır (`◨`).
-- **Yuxarıya çəkdikdə** tam ekran böyüyür (`◻`).
-- Hər kənara **25px maqnit cəzbetməsi** var.
+### 🧠 Tövsiyə Olunan Agentik & Kodlaşdırma Modelləri (<= 7B):
+
+J.A.R.V.I.S və quraşdırma skriptləri xüsusi olaraq **4GB–8GB VRAM və 6GB–16GB RAM** üçün ən güclü agentik və kod modelləri ilə inteqrasiya edilib:
+
+| Model | Həcm | VRAM/RAM | Sürət | İxtisaslaşma & Güclü Tərəfi |
+|---|---|---|---|---|
+| **`qwen2.5-coder:3b`** *(Default)* | ~1.9 GB | 4GB - 6GB | ⚡ **65+ tok/s** | ⭐ **Ən balanslı seçim**: Sürət, dəqiq agentik alət çağırma və kod yazma |
+| **`qwen2.5-coder:7b`** | ~4.7 GB | 6GB - 8GB | 🚀 **35+ tok/s** | 🏆 **<= 7B üzrə dünya 1-cisi**: Full-stack proqramlaşdırma və mürəkkəb refaktorinq |
+| **`deepseek-coder:6.7b`** | ~3.8 GB | 6GB - 8GB | 🚀 **35+ tok/s** | 🛠️ Dərin layihə arxitekturası, bug hunting və repo analizi |
+| **`deepseek-r1:7b`** | ~4.7 GB | 6GB - 8GB | 🧠 **30+ tok/s** | 💡 Chain-of-Thought (düşünərək cavab vermə) və alqoritm həlli |
+| **`qwen2.5-coder:1.5b`** | ~980 MB | 2GB - 4GB | ⚡ **120+ tok/s** | 💨 Ultra-sürətli kodlaşdırma və sürətli cavablar |
+| **`deepseek-r1:1.5b`** | ~1.1 GB | 2GB - 4GB | ⚡ **90+ tok/s** | 🧠 Yüngül düşünmə modeli |
+| **`gemma3:4b`** | ~3.1 GB | 4GB - 6GB | ⚡ **45+ tok/s** | 🌐 Google-un təbii ünsiyyət və kod modeli |
+| **`starcoder2:3b`** | ~1.8 GB | 4GB - 6GB | ⚡ **60+ tok/s** | 💻 Çoxdilli (Python, JS, C++, Go, Rust) kod tamamlama |
+| **`codellama:7b`** | ~3.8 GB | 6GB - 8GB | 🚀 **35+ tok/s** | 🐍 Meta-nın Python və backend modeli |
 
 ---
 
@@ -144,7 +158,7 @@ J.A.R.V.I.S istifadəçinin bütün kompüterini və proqramlaşdırma prosesini
 
 ## 🧪 Running Tests
 
-Repository-də **614 unit və inteqrasiya testi** 100% keçir:
+Repository-də **628 unit və inteqrasiya testi** 100% keçir:
 
 ```bash
 # Bütün testləri işə salmaq:

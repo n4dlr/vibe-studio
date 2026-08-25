@@ -16,8 +16,9 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
+
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -111,6 +112,11 @@ class ArcReactorWidget(QWidget):
         painter.drawEllipse(QPointF(cx, cy), core_r, core_r)
 
 
+class VoiceBridge(QObject):
+    """Thread-safe Qt signal bridge for audio transcription and wake-word events."""
+    transcription_ready = Signal(str)
+
+
 class JarvisHUDPanel(QWidget):
     """Full Agentic J.A.R.V.I.S holographic cockpit and voice intelligence panel."""
 
@@ -122,7 +128,13 @@ class JarvisHUDPanel(QWidget):
         self.jarvis.start_sentinel()
         self._is_voice_recording = False
 
+        # Thread-safe Voice Bridge for GUI STT
+        self._voice_bridge = VoiceBridge()
+        self._voice_bridge.transcription_ready.connect(self._on_transcribed)
+        self.jarvis.voice_listener.on_wake_word = lambda w: self._voice_bridge.transcription_ready.emit(w)
+
         self._setup_ui()
+
 
         # Telemetry refresh timer (every 2 seconds)
         self._telemetry_timer = QTimer(self)
@@ -163,6 +175,7 @@ class JarvisHUDPanel(QWidget):
 
         # AI Model Selector
         self.model_combo = QComboBox()
+        self.model_combo.setMaximumWidth(135)
         available_models = self.jarvis.list_available_models()
         self.model_combo.addItems(available_models)
         if self.jarvis.model in available_models:
@@ -173,7 +186,7 @@ class JarvisHUDPanel(QWidget):
                 color: {_GOLD};
                 border: 1px solid {_BORDER};
                 border-radius: 4px;
-                padding: 2px 8px;
+                padding: 2px 6px;
                 font-size: 11px;
                 font-weight: bold;
             }}
@@ -181,13 +194,17 @@ class JarvisHUDPanel(QWidget):
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         title_row.addWidget(self.model_combo)
 
-        # Voice Selector
+        # Voice Persona / Gender Selector
         self.voice_combo = QComboBox()
+        self.voice_combo.setMaximumWidth(140)
         self.voice_combo.addItems([
-            "🇦🇿 Azerbaijani (Babek)",
-            "🇬🇧 British Butler (Ryan)",
-            "🇺🇸 Modern AI (Christopher)",
-            "🇹🇷 Turkish (Ahmet)",
+            "🇦🇿 Banu (Qadın)",
+            "🇦🇿 Babək (Kişi)",
+            "🇬🇧 Ryan (Butler)",
+            "🇺🇸 Jenny (Friday)",
+            "🇺🇸 Christopher",
+            "🇹🇷 Emel (Kadın)",
+            "🇹🇷 Ahmet (Erkek)",
         ])
         self.voice_combo.setStyleSheet(f"""
             QComboBox {{
@@ -195,22 +212,40 @@ class JarvisHUDPanel(QWidget):
                 color: {_TEXT};
                 border: 1px solid {_BORDER};
                 border-radius: 4px;
-                padding: 2px 8px;
+                padding: 2px 6px;
                 font-size: 11px;
             }}
         """)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
         title_row.addWidget(self.voice_combo)
 
+        # Wake-Word Live Listener Toggle
+        self.wake_btn = QPushButton("🎙️ Wake: OFF")
+        self.wake_btn.setMaximumWidth(90)
+        self.wake_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {_BG_DEEP};
+                color: {_TEXT_MUTED};
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+        """)
+        self.wake_btn.clicked.connect(self._toggle_wake_word)
+        title_row.addWidget(self.wake_btn)
+
         # Sentinel Watchdog Toggle
         self.sentinel_btn = QPushButton("🛡️ Sentinel: ON")
+        self.sentinel_btn.setMaximumWidth(95)
         self.sentinel_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {_BG_DEEP};
                 color: {_GREEN};
                 border: 1px solid {_GREEN};
                 border-radius: 4px;
-                padding: 2px 8px;
+                padding: 2px 6px;
                 font-size: 10px;
                 font-weight: bold;
             }}
@@ -219,7 +254,9 @@ class JarvisHUDPanel(QWidget):
         title_row.addWidget(self.sentinel_btn)
         title_row.addStretch()
 
+
         info_layout.addLayout(title_row)
+
 
         sub_lbl = QLabel("Full Agentic Autonomous Intelligence · Bilingual Neural Voice · OS & Software Engineer")
         sub_lbl.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 11px;")
@@ -386,10 +423,28 @@ class JarvisHUDPanel(QWidget):
             self.jarvis.speak(f"Neural model updated to {model_name}, sir.")
 
     def _on_voice_changed(self, index: int) -> None:
-        voice_keys = ["azerbaijani", "british", "modern", "turkish"]
-        if 0 <= index < len(voice_keys):
-            self.jarvis.voice_engine.set_voice(voice_keys[index])
-            self.jarvis.speak(f"Səs tənzimləməsi yeniləndi, cənab.")
+        persona_keys = ["banu", "babek", "ryan", "friday", "modern", "emel", "ahmet"]
+        if 0 <= index < len(persona_keys):
+            p = persona_keys[index]
+            self.jarvis.voice_engine.set_persona(p)
+            v_info = self.jarvis.voice_engine.get_current_voice_info()
+            g_name = "Qadın (Banu)" if p == "banu" else ("Kişi (Babək)" if p == "babek" else p.capitalize())
+            self.output_box.append(f"<span style='color:{_GOLD}; font-style:italic;'>[Voice] Səs '{g_name}' olaraq dəyişdirildi.</span>\n")
+            self.jarvis.speak("Səs tənzimləməsi yeniləndi, cənab.")
+
+    def _toggle_wake_word(self) -> None:
+        if self.jarvis.voice_listener.is_wake_word_active:
+            self.jarvis.voice_listener.stop_wake_word_daemon()
+            self.wake_btn.setText("🎙️ Wake: OFF")
+            self.wake_btn.setStyleSheet(f"background: {_BG_DEEP}; color: {_TEXT_MUTED}; border: 1px solid {_BORDER}; border-radius: 4px; padding: 2px 8px; font-size: 10px;")
+            self.output_box.append("<span style='color:#94a3b8; font-style:italic;'>[Wake-Word] Canlı dinləmə dayandırıldı.</span>\n")
+        else:
+            self.jarvis.voice_listener.start_wake_word_daemon()
+            self.wake_btn.setText("🎙️ Wake: ON")
+            self.wake_btn.setStyleSheet(f"background: {_BG_DEEP}; color: {_CYAN}; border: 1px solid {_CYAN}; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold;")
+            self.output_box.append("<span style='color:#38bdf8; font-style:italic;'>[Wake-Word] Canlı 'Hey Jarvis' dinləməsi aktivdir!</span>\n")
+            self.jarvis.speak("Canlı dinləmə aktivdir, cənab.")
+
 
     def _toggle_sentinel(self) -> None:
         if self.jarvis.watchdog.is_running:
