@@ -119,6 +119,26 @@ class SystemTelemetry:
             except Exception:
                 cpu_percent = 15.0
 
+            # Linux kernel /proc/meminfo fallback
+            import re
+            try:
+                p_mem = Path("/proc/meminfo")
+                if p_mem.exists():
+                    mem_txt = p_mem.read_text(encoding="utf-8")
+                    m_tot = re.search(r"MemTotal:\s+(\d+)\s+kB", mem_txt)
+                    m_avail = re.search(r"MemAvailable:\s+(\d+)\s+kB", mem_txt)
+                    if m_tot:
+                        tot_kb = float(m_tot.group(1))
+                        ram_total_gb = tot_kb / (1024 * 1024)
+                        if m_avail:
+                            avail_kb = float(m_avail.group(1))
+                            used_kb = tot_kb - avail_kb
+                            ram_used_gb = used_kb / (1024 * 1024)
+                            ram_percent = (used_kb / tot_kb) * 100.0
+            except Exception:
+                pass
+
+
         # Disk usage
         try:
             du = shutil.disk_usage(".")

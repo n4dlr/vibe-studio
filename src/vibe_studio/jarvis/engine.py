@@ -324,11 +324,93 @@ class JarvisCore:
             self._emit("command_completed", {"response": spoken, "result": snap.to_dict()})
             return res
 
-        # 1q. Direct simple file creation shortcut on Desktop / Workspace
+        # 1q. RAM / Memory info check
+        if any(k in p for k in ["how many ram", "how much ram", "what is my ram", "check ram", "ram info", "ram amount", "ram nə qədərdir", "nə qədər ram", "ram miqdarı", "operativ yaddaş", "ram status", "yaddaş nə qədərdir", "ram usage", "ram-ım nə qədər"]):
+            snap = self.telemetry.get_snapshot()
+            spoken = (
+                f"You have {snap.ram_total_gb:.1f} gigabytes of RAM installed, currently using {snap.ram_used_gb:.1f} gigabytes ({snap.ram_percent:.0f}%), sir."
+            ) if not is_az else (
+                f"Sistemdə ümumi {snap.ram_total_gb:.1f} GB RAM mövcuddur, hazırda {snap.ram_used_gb:.1f} GB ({snap.ram_percent:.0f}%) istifadə olunur, cənab."
+            )
+            self.speak(spoken)
+            res = JarvisResponse(
+                spoken_text=spoken,
+                action_taken="ram_info",
+                action_result={"ram_total_gb": snap.ram_total_gb, "ram_used_gb": snap.ram_used_gb, "ram_percent": snap.ram_percent},
+                telemetry=snap,
+                execution_time=time.monotonic() - t0,
+                model_used=self.model,
+            )
+            self._emit("command_completed", {"response": spoken, "result": snap.to_dict()})
+            return res
+
+        # 1r. CPU info check
+        if any(k in p for k in ["cpu load", "cpu usage", "what is my cpu", "check cpu", "cpu info", "prosessor nədir", "prosessor yükü", "prosessor məlumatı", "neçə nüvə var", "cpu cores"]):
+            snap = self.telemetry.get_snapshot()
+            spoken = (
+                f"CPU load is currently at {snap.cpu_percent:.0f}% across {snap.cpu_cores} physical cores, sir."
+            ) if not is_az else (
+                f"Prosessor yükü hazırda {snap.cpu_cores} nüvə üzrə {snap.cpu_percent:.0f}% səviyyəsindədir, cənab."
+            )
+            self.speak(spoken)
+            res = JarvisResponse(
+                spoken_text=spoken,
+                action_taken="cpu_info",
+                action_result={"cpu_percent": snap.cpu_percent, "cpu_cores": snap.cpu_cores},
+                telemetry=snap,
+                execution_time=time.monotonic() - t0,
+                model_used=self.model,
+            )
+            self._emit("command_completed", {"response": spoken, "result": snap.to_dict()})
+            return res
+
+        # 1s. GPU / Graphics Card info check
+        if any(k in p for k in ["what is my gpu", "what gpu", "graphics card", "check gpu", "gpu info", "gpu nədir", "videokart nədir", "qrafik kartı"]):
+            snap = self.telemetry.get_snapshot()
+            gpu_name = snap.gpu_name or "Integrated Graphics"
+            spoken = (
+                f"Your graphics processor is {gpu_name}, sir."
+            ) if not is_az else (
+                f"Qrafik kartınız {gpu_name}-dir, cənab."
+            )
+            self.speak(spoken)
+            res = JarvisResponse(
+                spoken_text=spoken,
+                action_taken="gpu_info",
+                action_result={"gpu": gpu_name},
+                telemetry=snap,
+                execution_time=time.monotonic() - t0,
+                model_used=self.model,
+            )
+            self._emit("command_completed", {"response": spoken, "result": snap.to_dict()})
+            return res
+
+        # 1t. Disk Storage info check
+        if any(k in p for k in ["how much disk", "disk space", "disk storage", "check disk", "storage info", "disk yeri nə qədərdir", "yaddaşda nə qədər yer var", "disk tutumu", "ssd status"]):
+            snap = self.telemetry.get_snapshot()
+            spoken = (
+                f"Disk storage has {snap.disk_used_gb:.1f} gigabytes used out of {snap.disk_total_gb:.1f} gigabytes ({snap.disk_percent:.0f}%), sir."
+            ) if not is_az else (
+                f"Diskdə ümumi {snap.disk_total_gb:.1f} GB yaddaşdan {snap.disk_used_gb:.1f} GB ({snap.disk_percent:.0f}%) istifadə olunub, cənab."
+            )
+            self.speak(spoken)
+            res = JarvisResponse(
+                spoken_text=spoken,
+                action_taken="disk_info",
+                action_result={"disk_used_gb": snap.disk_used_gb, "disk_total_gb": snap.disk_total_gb, "disk_percent": snap.disk_percent},
+                telemetry=snap,
+                execution_time=time.monotonic() - t0,
+                model_used=self.model,
+            )
+            self._emit("command_completed", {"response": spoken, "result": snap.to_dict()})
+            return res
+
+        # 1u. Direct simple file creation shortcut on Desktop / Workspace
         m_create_file = (
             re.search(r"(?:create|make|write)\s+(?:a\s+|an\s+)?(?:simple\s+)?([a-zA-Z0-9_\-\.]+)\s+(?:file\s+)?(?:in|on)\s+(desktop|workspace|masaüstü)", p)
             or re.search(r"(?:masaüstündə|desktopda)\s+([a-zA-Z0-9_\-\.]+)\s+(?:faylı\s+)?(?:yarat|aç)", p)
         )
+
         if m_create_file:
             fname = m_create_file.group(1).strip()
             loc = m_create_file.group(2).strip() if len(m_create_file.groups()) > 1 and m_create_file.group(2) else "desktop"
@@ -348,8 +430,34 @@ class JarvisCore:
             self._emit("command_completed", {"response": spoken, "result": w_res})
             return res
 
+        # 1v. Universal Software & Package Installation: "install htop", "htop yüklə", "pip install requests"
+        m_install = (
+            re.search(r"(?:install|yüklə|download\s+and\s+install)\s+([a-zA-Z0-9_\-\.\:\@\/]+)", p)
+            or re.search(r"([a-zA-Z0-9_\-\.\:\@\/]+)\s+(?:proqramını\s+|paketini\s+)?yüklə", p)
+        )
+        if m_install and not any(k in p for k in ["desktop", "workspace", "main.py", "fayl", "file"]):
+            pkg_target = m_install.group(1).strip()
+            if pkg_target not in ("app", "application", "proqram", "paket"):
+                ins_res = self.system_tools.install_package(pkg_target)
+                mgr = ins_res.get("manager", "package manager")
+                if ins_res.get("status") == "success":
+                    spoken = f"Successfully installed {pkg_target} via {mgr}, sir." if not is_az else f"{pkg_target} paketi {mgr} vasitəsilə uğurla quraşdırıldı, cənab."
+                else:
+                    spoken = f"Package installation of {pkg_target} encountered an issue via {mgr}, sir." if not is_az else f"{pkg_target} paketinin {mgr} vasitəsilə quraşdırılmasında xəta baş verdi, cənab."
+                self.speak(spoken)
+                res = JarvisResponse(
+                    spoken_text=spoken,
+                    action_taken="install_package",
+                    action_result=ins_res,
+                    execution_time=time.monotonic() - t0,
+                    model_used=self.model,
+                )
+                self._emit("command_completed", {"response": spoken, "result": ins_res})
+                return res
+
         # 2. Specific Speedtest / Fast.com intent
         if "fast.com" in p or "speedtest" in p or "speed test" in p:
+
 
 
 
@@ -561,15 +669,21 @@ class JarvisCore:
         system_prompt = (
             f"You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), Tony Stark's autonomous AI assistant "
             f"and expert software engineer deeply integrated into the OS and Vibe Studio IDE.\n"
-            f"CURRENT SYSTEM CONTEXT:\n"
+            f"CURRENT LIVE SYSTEM TELEMETRY & HARDWARE:\n"
             f"- Operating System: {snap.os_name}\n"
             f"- Hostname: {snap.hostname}\n"
+            f"- RAM: {snap.ram_used_gb:.1f} GB used / {snap.ram_total_gb:.1f} GB total ({snap.ram_percent:.1f}%)\n"
+            f"- CPU: {snap.cpu_percent:.1f}% load ({snap.cpu_cores} cores)\n"
+            f"- GPU: {snap.gpu_name or 'N/A'}\n"
+            f"- Disk: {snap.disk_used_gb:.1f} GB used / {snap.disk_total_gb:.1f} GB total ({snap.disk_percent:.1f}%)\n"
             f"- User Desktop Path: {self.coding_bridge.desktop_dir}\n"
             f"- Workspace Root: {self.workspace_root}\n"
             f"- Active AI Model: {self.model}\n\n"
+            f"When asked about RAM, CPU, GPU, OS, disk, or hardware, use these real metrics directly.\n"
             "You are respectful, highly competent, concise, and address the user as 'sir' (or 'cənab' in Azerbaijani).\n"
             "If the user asks in Azerbaijani, respond fluently and naturally in Azerbaijani.\n"
             f"When creating files on Desktop, use 'Desktop/filename' or '{self.coding_bridge.desktop_dir}/filename'.\n\n"
+
             "You have FULL AUTONOMOUS AGENTIC POWERS to write code, create files, run terminal commands, and control the OS.\n"
             "Whenever an action is required, emit one or more tool calls in this exact format:\n"
             "[TOOL: write_file(\"path\", \"content\")]\n"

@@ -520,4 +520,111 @@ class JarvisSystemTools:
                 return {"status": "error", "message": f"Could not suspend: {e}"}
         return {"status": "error", "message": "systemctl not available."}
 
+    # ------------------------------------------------------------------
+    # Universal Cross-Platform Package & Software Installer
+    # ------------------------------------------------------------------
+
+    def detect_package_manager(self) -> dict[str, str]:
+        """Detect available OS and runtime package managers across Linux, macOS, and Windows."""
+        import platform
+        os_sys = platform.system().lower()
+        managers: dict[str, str] = {}
+
+        if "windows" in os_sys:
+            if shutil.which("winget"):
+                managers["os"] = "winget"
+            elif shutil.which("choco"):
+                managers["os"] = "choco"
+            elif shutil.which("scoop"):
+                managers["os"] = "scoop"
+            elif shutil.which("powershell"):
+                managers["os"] = "powershell"
+        elif "darwin" in os_sys:
+            if shutil.which("brew"):
+                managers["os"] = "brew"
+        else: # Linux
+            if shutil.which("apt") or shutil.which("apt-get"):
+                managers["os"] = "apt"
+            elif shutil.which("dnf"):
+                managers["os"] = "dnf"
+            elif shutil.which("pacman"):
+                managers["os"] = "pacman"
+            elif shutil.which("snap"):
+                managers["os"] = "snap"
+            elif shutil.which("flatpak"):
+                managers["os"] = "flatpak"
+
+        if shutil.which("pip") or shutil.which("pip3"):
+            managers["python"] = "pip"
+        if shutil.which("npm"):
+            managers["node"] = "npm"
+        if shutil.which("cargo"):
+            managers["rust"] = "cargo"
+
+        return managers
+
+    def install_package(self, package_name: str, manager: str = "auto") -> dict[str, Any]:
+        """Install software or libraries dynamically adapting to the host OS package manager."""
+        pkg = package_name.strip()
+        mgrs = self.detect_package_manager()
+        os_mgr = mgrs.get("os", "apt")
+
+        # Determine target manager and command
+        cmd: list[str] = []
+        chosen_mgr = manager if manager != "auto" else os_mgr
+
+        if "pip" in pkg.lower() or pkg.startswith(("pip:", "py:")):
+            clean_p = pkg.split(":", 1)[-1].replace("pip install", "").strip()
+            pip_exe = shutil.which("pip3") or shutil.which("pip") or "pip"
+            cmd = [pip_exe, "install", clean_p]
+            chosen_mgr = "pip"
+        elif "npm" in pkg.lower() or pkg.startswith(("npm:", "node:")):
+            clean_p = pkg.split(":", 1)[-1].replace("npm install", "").strip()
+            cmd = ["npm", "install", "-g", clean_p]
+            chosen_mgr = "npm"
+        elif chosen_mgr == "apt" or (manager == "auto" and os_mgr == "apt"):
+            cmd = ["sudo", "apt-get", "install", "-y", pkg] if os.geteuid() == 0 else ["apt-get", "install", "-y", pkg]
+        elif chosen_mgr == "dnf":
+            cmd = ["sudo", "dnf", "install", "-y", pkg]
+        elif chosen_mgr == "pacman":
+            cmd = ["sudo", "pacman", "-S", "--noconfirm", pkg]
+        elif chosen_mgr == "brew":
+            cmd = ["brew", "install", pkg]
+        elif chosen_mgr == "winget":
+            cmd = ["winget", "install", "--id", pkg, "-e", "--accept-source-agreements", "--accept-package-agreements"]
+        elif chosen_mgr == "choco":
+            cmd = ["choco", "install", pkg, "-y"]
+        elif chosen_mgr == "scoop":
+            cmd = ["scoop", "install", pkg]
+        else:
+            cmd = [os_mgr, "install", pkg]
+
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+            if res.returncode == 0:
+                return {
+                    "status": "success",
+                    "package": pkg,
+                    "manager": chosen_mgr,
+                    "output": res.stdout.strip()[:200],
+                    "message": f"Successfully installed {pkg} via {chosen_mgr}."
+                }
+            else:
+                return {
+                    "status": "failed",
+                    "package": pkg,
+                    "manager": chosen_mgr,
+                    "error": res.stderr.strip() or res.stdout.strip(),
+                    "message": f"Installation of {pkg} via {chosen_mgr} failed with code {res.returncode}."
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "package": pkg,
+                "manager": chosen_mgr,
+                "error": str(e),
+                "message": f"Could not execute installer {chosen_mgr}: {e}"
+            }
+
+
 

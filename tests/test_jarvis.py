@@ -374,6 +374,55 @@ def test_jarvis_tolerant_tool_call_parsing(tmp_path: Path):
     assert any("script.py" in str(f) for f in resp.files_modified)
 
 
+def test_jarvis_ram_info_query(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("how many ram i have?")
+
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "ram_info"
+    assert "ram" in resp.spoken_text.lower() or "gigabytes" in resp.spoken_text.lower()
+
+    resp_az = jarvis.execute_command("ram nə qədərdir?")
+    assert isinstance(resp_az, JarvisResponse)
+    assert resp_az.action_taken == "ram_info"
+    assert "gb" in resp_az.spoken_text.lower()
+
+
+def test_jarvis_cpu_and_gpu_query(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp_cpu = jarvis.execute_command("what is my cpu load?")
+    assert isinstance(resp_cpu, JarvisResponse)
+    assert resp_cpu.action_taken == "cpu_info"
+    assert "cpu" in resp_cpu.spoken_text.lower() or "cores" in resp_cpu.spoken_text.lower()
+
+    resp_gpu = jarvis.execute_command("what is my gpu?")
+    assert isinstance(resp_gpu, JarvisResponse)
+    assert resp_gpu.action_taken == "gpu_info"
+    assert "graphics" in resp_gpu.spoken_text.lower()
+
+
+def test_jarvis_disk_info_query(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    resp = jarvis.execute_command("check disk space")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "disk_info"
+    assert "disk" in resp.spoken_text.lower() or "storage" in resp.spoken_text.lower()
+
+
+def test_jarvis_install_package_intent(tmp_path: Path):
+    jarvis = JarvisCore(workspace_root=tmp_path)
+    mgrs = jarvis.system_tools.detect_package_manager()
+    assert isinstance(mgrs, dict)
+    assert "os" in mgrs or "python" in mgrs
+
+    resp = jarvis.execute_command("pip install requests")
+    assert isinstance(resp, JarvisResponse)
+    assert resp.action_taken == "install_package"
+    assert "requests" in resp.spoken_text.lower()
+
+
+
+
 
 
 
