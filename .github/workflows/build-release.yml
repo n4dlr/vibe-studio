@@ -1,0 +1,160 @@
+name: JARVIS Release Build & Packaging
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Test Suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+        python-version: [ '3.11', '3.12' ]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -e .[all]
+          pip install pytest pytest-anyio
+
+      - name: Run Tests
+        run: |
+          pytest tests/test_packaging_and_distribution.py -v
+          pytest tests/test_jarvis.py -v
+
+  build-linux:
+    name: Build Linux Debian Package (.deb)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Build System Utilities
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y dpkg-dev build-essential libasound2-dev libgl1-mesa-dev
+
+      - name: Install Python Dependencies & PyInstaller
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build Debian Package
+        run: |
+          python build_linux.py
+
+      - name: Calculate Checksums & Sizes
+        run: |
+          ls -la dist/
+          sha256sum dist/*.deb > dist/SHA256SUMS-linux.txt
+          cat dist/SHA256SUMS-linux.txt
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-linux-deb
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS-linux.txt
+
+  build-windows:
+    name: Build Windows Setup & Portable Packages
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup --yes
+
+      - name: Install Python Dependencies & PyInstaller
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build Windows Packages
+        run: |
+          python build_windows.py
+
+      - name: Calculate Checksums & Sizes
+        shell: bash
+        run: |
+          ls -la dist/
+          sha256sum dist/*.exe dist/*.zip > dist/SHA256SUMS-windows.txt
+          cat dist/SHA256SUMS-windows.txt
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-windows-packages
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS-windows.txt
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ build-linux, build-windows ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-linux-deb
+          path: dist
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-windows-packages
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS-*.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false

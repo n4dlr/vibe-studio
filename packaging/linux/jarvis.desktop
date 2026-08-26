@@ -1,0 +1,20 @@
+[Desktop Entry]
+Name=JARVIS
+GenericName=Autonomous AI Operating System
+Comment=AI-Native Autonomous Desktop Cockpit and Coding Intelligence
+Exec=/opt/jarvis/jarvis
+Icon=jarvis
+Terminal=false
+Type=Application
+Categories=Utility;Development;System;
+StartupNotify=true
+Keywords=AI;Assistant;Jarvis;Ollama;LLM;VibeStudio;
+Actions=Doctor;CLI;
+
+[Desktop Action Doctor]
+Name=Run Diagnostics (Doctor)
+Exec=/opt/jarvis/jarvis --doctor
+
+[Desktop Action CLI]
+Name=Launch in Terminal
+Exec=/opt/jarvis/jarvis --cli

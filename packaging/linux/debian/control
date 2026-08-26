@@ -1,0 +1,16 @@
+Package: jarvis
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Vibe Studio <contact@vibestudio.ai>
+Depends: libc6 (>= 2.34), libgl1, libegl1, libasound2, libx11-xcb1
+Recommends: wmctrl, xdotool, ffmpeg, libnotify-bin
+Suggests: ollama
+Installed-Size: 180000
+Homepage: https://github.com/n4dlr/vibe-studio
+Description: J.A.R.V.I.S — AI-Native Autonomous Operating System & Desktop Cockpit
+ J.A.R.V.I.S (Just A Rather Very Intelligent System) is an autonomous
+ desktop AI operating system and software engineering companion.
+ Features bilingual voice synthesis, hardware-accelerated local LLM inference,
+ screen automation, proactive system telemetry, and autonomous tool calling.

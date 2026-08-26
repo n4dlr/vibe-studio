@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+# Remove system symlink
+if [ -L "/usr/bin/jarvis" ]; then
+    rm -f /usr/bin/jarvis
+fi
+
+# Clean up opt directory on purge
+if [ "$1" = "purge" ] || [ "$1" = "remove" ]; then
+    rm -rf /opt/jarvis
+fi
+
+# Update desktop cache
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+
+exit 0

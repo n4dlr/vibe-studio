@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+# Link executable into standard system bin
+if [ -f "/opt/jarvis/jarvis" ]; then
+    chmod +x /opt/jarvis/jarvis
+    ln -sf /opt/jarvis/jarvis /usr/bin/jarvis
+fi
+
+# Update desktop and mime databases if utilities exist
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q /usr/share/icons/hicolor || true
+fi
+
+echo "================================================================="
+echo "  ⚡ J.A.R.V.I.S Autonomous OS installed successfully!"
+echo "  Launch anytime by typing: jarvis"
+echo "  Or find 'JARVIS' in your Application Menu."
+echo "================================================================="
+
+exit 0
